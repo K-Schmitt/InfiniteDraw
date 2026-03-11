@@ -1,0 +1,22 @@
+{
+  "name": "infinitedraw",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Collaborative infinite vector drawing app",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:client\" \"npm run dev:server\"",
+    "dev:client": "cd client && npm run dev",
+    "dev:server": "cd server && npm run dev",
+    "build": "npm run build:client && npm run build:server",
+    "build:client": "cd client && npm run build",
+    "build:server": "cd server && npm run build",
+    "test": "cd client && npm run test",
+    "lint": "cd client && npm run lint && cd ../server && npm run lint"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}
