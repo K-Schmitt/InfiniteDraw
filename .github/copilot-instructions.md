@@ -42,8 +42,27 @@ Collaborative infinite vector drawing app. Strokes are point+pressure arrays (no
 - `server/src/rooms/`     : RoomManager (lobby + user tracking)
 - `server/src/storage/`   : FileStore binary serializer (Lorien-compatible format)
 
+## Complete Feature Scope
+All features below are in-scope. Do not skip or stub any of them in final code.
+
+- **Infinite canvas** — limitless, smooth zoom + right-click pan, viewport culling
+- **Stylus pressure** — Pointer Events API; pressure → thickness/opacity (Wacom, iPad…)
+- **Tools** — freehand brush, eraser, line, rectangle, ellipse, eyedropper
+- **Layers** — multi-layer, blend modes (Multiply, Screen, Overlay, Darken, Lighten, Add)
+- **Stroke editing** — rectangular selection + lasso; move/delete strokes post-creation
+- **Clipboard** — copy-paste stroke groups within and across projects
+- **Undo/Redo** — unlimited (index into in-memory stroke array)
+- **Multiplayer** — Socket.io rooms; live stroke preview + cursor broadcast
+- **Bookmarks** — named (x, y, zoom) anchors for quick canvas navigation
+- **Zen mode** — keyboard shortcut hides all UI, maximises canvas
+- **Context menu** — CTRL+right-click for quick tool menu; right-click = pan
+- **Save format** — binary delta-append (server appends strokes, never full rewrite)
+- **Export** — screenshot zone → PNG/JPG; full canvas → SVG
+- **Color palettes** — built-in + user-defined, saveable per project
+
 ## Resources & Tools
 - `npm run dev`           : Start client (:5173) + server (:3000)
 - `npm run test`          : Vitest unit tests
 - `npm run lint`          : TypeScript type-check (tsc --noEmit)
 - `npm run build`         : Production build for client + server
+- `docs/features.md`      : Detailed per-feature implementation notes

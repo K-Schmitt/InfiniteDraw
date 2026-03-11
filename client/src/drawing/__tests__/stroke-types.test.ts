@@ -13,8 +13,8 @@ describe('BrushStroke type constants', () => {
   it('binary size constants match expected layout', () => {
     // f32 x (4) + f32 y (4) + u8 pressure (1) = 9
     expect(BYTES_PER_POINT).toBe(9);
-    // u8 type + u8 r + u8 g + u8 b + u8 a + u16 size + u16 pointCount = 8
-    expect(STROKE_HEADER_SIZE).toBe(8);
+    // u8 type + u8 r + u8 g + u8 b + u8 a + u16 size + u16 pointCount = 9
+    expect(STROKE_HEADER_SIZE).toBe(9);
   });
 });
 

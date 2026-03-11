@@ -46,3 +46,45 @@ A collaborative infinite vector drawing app inspired by Lorien. Strokes are stor
 - All shared types in `shared/types/` — never duplicate in client or server
 - Binary file format: version(u32) + meta(pascal-str) + strokes; see `server/src/storage/`
 - Socket events: typed via `ServerToClientEvents` / `ClientToServerEvents` interfaces
+
+## Complete Feature Spec
+Every feature below is in scope. Do not omit or simplify any of them.
+
+**Canvas & Navigation**
+- Infinite canvas — limitless surface, smooth zoom + right-click pan
+- Bookmarks — named camera anchors (x, y, zoom) for quick navigation to saved zones
+- Zen mode — keyboard shortcut hides all UI, maximises canvas space
+
+**Input & Tools**
+- Stylus support — full Pointer Events API: pressure affects brush thickness/opacity (Wacom, iPad, etc.)
+- Freehand brush — rendered via `perfect-freehand`, pressure-sensitive
+- Eraser — pressure-sensitive, vector-based (removes stroke segments, not pixels)
+- Shapes — straight line, rectangle, ellipse
+- Color picker / eyedropper — pick color from canvas
+
+**Layers**
+- Multi-layer system — add, remove, reorder, rename, lock, hide layers
+- Blend modes — Normal, Multiply, Screen, Overlay, Darken, Lighten, Add
+
+**Editing**
+- Stroke selection — rectangular selection + lasso, targets individual vector strokes
+- Move/delete — selected strokes can be repositioned or removed post-creation
+- Clipboard — copy-paste stroke groups; works within a project and across projects
+- Undo/Redo — unlimited, implemented as index into in-memory stroke array
+
+**Multiplayer**
+- Real-time lobbies — create/join rooms via Socket.io; live stroke preview while drawing
+- Cursor broadcast — other users' cursors visible in world space
+
+**Save & Export**
+- Proprietary binary format — delta-append mode (server appends new strokes, never rewrites full file)
+- Screenshot export — capture a user-defined zone as PNG or JPG
+- SVG export — mathematical vector export of the full canvas
+
+**UI**
+- Context menu — CTRL+right-click shows quick tool radial/list menu
+- Color palettes — built-in palettes + user-defined, customisable, saveable per project
+
+## Agent Docs
+Read when relevant:
+- docs/features.md — detailed per-feature implementation notes and open questions
