@@ -1,9 +1,7 @@
-/**
- * Entry point — Step 1 stub.
- * Full rendering engine implemented in Step 2 (PixiApp + Camera).
- */
+import { PixiApp } from './app/PixiApp';
 
-const app = document.getElementById('app');
-if (!app) throw new Error('Missing #app element');
+const container = document.getElementById('app');
+if (!container) throw new Error('Missing #app element');
 
-app.textContent = 'InfiniteDraw — initializing…';
+const app = new PixiApp();
+app.init(container).catch(console.error);

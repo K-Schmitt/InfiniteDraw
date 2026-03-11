@@ -1,0 +1,64 @@
+import type { Camera, Viewport } from '@shared/camera';
+import { DEFAULT_CAMERA, MIN_ZOOM, MAX_ZOOM } from '@shared/camera';
+
+/**
+ * Manages the infinite canvas camera: pan, zoom, and coordinate transforms.
+ *
+ * World space is unbounded. Screen space is the CSS pixel coordinate of the canvas.
+ * Transform: screenX = (worldX - camera.x) * camera.zoom
+ * Inverse:   worldX  = screenX / camera.zoom + camera.x
+ */
+export class CameraController {
+  private state: Camera = { ...DEFAULT_CAMERA };
+
+  get x(): number { return this.state.x; }
+  get y(): number { return this.state.y; }
+  get zoom(): number { return this.state.zoom; }
+
+  toWorld(screenX: number, screenY: number): { x: number; y: number } {
+    return {
+      x: screenX / this.state.zoom + this.state.x,
+      y: screenY / this.state.zoom + this.state.y,
+    };
+  }
+
+  toScreen(worldX: number, worldY: number): { x: number; y: number } {
+    return {
+      x: (worldX - this.state.x) * this.state.zoom,
+      y: (worldY - this.state.y) * this.state.zoom,
+    };
+  }
+
+  /** Pan by a screen-space delta (e.g. pointer drag delta in CSS pixels). */
+  pan(dx: number, dy: number): void {
+    this.state.x -= dx / this.state.zoom;
+    this.state.y -= dy / this.state.zoom;
+  }
+
+  /** Zoom by a multiplicative factor toward a screen-space point. */
+  zoomAt(factor: number, screenX: number, screenY: number): void {
+    const worldX = this.toWorld(screenX, screenY).x;
+    const worldY = this.toWorld(screenX, screenY).y;
+    this.state.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, this.state.zoom * factor));
+    this.state.x = worldX - screenX / this.state.zoom;
+    this.state.y = worldY - screenY / this.state.zoom;
+  }
+
+  /** Returns the visible world-space rectangle for culling. */
+  getViewport(screenWidth: number, screenHeight: number): Viewport {
+    return {
+      x: this.state.x,
+      y: this.state.y,
+      width: screenWidth / this.state.zoom,
+      height: screenHeight / this.state.zoom,
+    };
+  }
+
+  getSnapshot(): Camera {
+    return { ...this.state };
+  }
+
+  restore(snapshot: Camera): void {
+    this.state = { ...snapshot };
+  }
+}
