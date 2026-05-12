@@ -1,5 +1,20 @@
 # InfiniteDraw — Decision Log
 
+## Academic Contract Summary
+- **Official title:** InfinityBoard: Real-Time Vector Infinite Canvas
+- **Author:** Kylian Schmitt
+- **Start:** 2026-04-30 · **Deadline:** 2026-05-21 · **Credits:** 4
+- **Required stack (per contract):** Vite TypeScript, Socket.io, perfect-freehand, PixiJS + WebGL
+
+### Milestone Timeline
+| Milestone | Days | Cumulative | Target date |
+|-----------|------|------------|-------------|
+| 1 — Architecture + camera | 5d | 5d | 2026-05-05 |
+| 2 — Drawing tools | 4d | 9d | 2026-05-09 |
+| 3 — Serialization + undo | 4d | 13d | 2026-05-13 |
+| 4 — Real-time collab | 5d | 18d | 2026-05-18 |
+| 5 — Polish + export | 3d | 21d | 2026-05-21 |
+
 ## Architecture Decisions
 
 ### Monorepo without workspaces
@@ -31,6 +46,10 @@
 ### Flat file storage, no database
 **Decision:** Single `.lorien` binary file per room. No relational DB.
 **Rationale:** Matches Lorien's design. Stroke data is append-only (undo is client-side only). Eliminates operational overhead of a DB. Future migration to SQLite or S3 is straightforward.
+
+### Binary format instead of JSON (diverges from contract)
+**Decision:** Custom binary format instead of the "highly compressed JSON" mentioned in the contract.
+**Rationale:** The contract says "highly compressed JSON" but a proper binary layout (u8/u16/f32 fields) is 5–10× smaller and faster to parse. The deliverable requirement (lightweight, fast-loading stroke storage) is fully met — the implementation just exceeds the spec. Will document this choice if asked by the professor.
 
 ## Open Questions
 - [ ] Should `pressures` fall back to a synthesized value when the device doesn't report pressure (mouse)?

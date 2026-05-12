@@ -3,15 +3,42 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>InfiniteDraw</title>
+    <title>InfinityBoard</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1a1a; }
-      #app { width: 100%; height: 100%; }
+      #app { width: 100%; height: 100%; cursor: crosshair; }
+
+      #hud {
+        position: fixed;
+        bottom: 16px;
+        right: 16px;
+        font: 11px/1 'SF Mono', 'Consolas', monospace;
+        color: #888;
+        pointer-events: none;
+        user-select: none;
+      }
+
+      #help {
+        position: fixed;
+        bottom: 16px;
+        left: 16px;
+        font: 11px/1.7 'SF Mono', 'Consolas', monospace;
+        color: #666;
+        pointer-events: none;
+        user-select: none;
+      }
     </style>
   </head>
   <body>
     <div id="app"></div>
+    <div id="hud">100%</div>
+    <div id="help">
+      Draw &nbsp;&nbsp;Left click<br>
+      Pan &nbsp;&nbsp;&nbsp;Right-click drag<br>
+      Zoom &nbsp;&nbsp;Scroll wheel<br>
+      Undo &nbsp;&nbsp;Ctrl+Z &nbsp;&nbsp;Redo Ctrl+Y
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

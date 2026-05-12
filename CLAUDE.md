@@ -1,7 +1,10 @@
 # InfiniteDraw
 
+> **Academic project** — Official name: **InfinityBoard: Real-Time Vector Infinite Canvas**
+> Author: Kylian Schmitt · Start: 2026-04-30 · Duration: 21 days · Deadline: **2026-05-21** · 4 credits
+
 ## What This Is
-A collaborative infinite vector drawing app inspired by Lorien. Strokes are stored as points+pressures (not pixels), enabling lossless zoom and tiny file sizes. Real-time collaboration via WebSockets.
+A collaborative infinite vector drawing app. Strokes are stored as points+pressures (not pixels), enabling lossless zoom and tiny file sizes. Real-time collaboration via WebSockets.
 
 ## Stack
 - TypeScript 5.7 (strict)
@@ -84,6 +87,25 @@ Every feature below is in scope. Do not omit or simplify any of them.
 **UI**
 - Context menu — CTRL+right-click shows quick tool radial/list menu
 - Color palettes — built-in palettes + user-defined, customisable, saveable per project
+
+## Academic Milestones
+These are the deliverables as defined in the professor's contract. Each milestone maps to a release version.
+
+| # | Milestone | Days | Release | Scope |
+|---|-----------|------|---------|-------|
+| 1 | Base architecture + infinite camera | 5d | v1.0 | Monorepo setup, screen↔world coordinate transform, right-click pan, mousewheel zoom, viewport culling |
+| 2 | Drawing tools + Pointer Events | 4d | v2.0 | Pointer Events API (pressure x/y), perfect-freehand brush, eraser, Line + Rectangle tools, color picker, brush size slider |
+| 3 | Data serialization + local storage | 4d | v2.0 | TypeScript Stroke interfaces, serialization to compressed format, Undo/Redo via stroke array index |
+| 4 | Real-time collaboration (WebSockets) | 5d | v3.0 | Socket.io server, stroke broadcast, live active-path preview, append-only backend save |
+| 5 | UI polish + export | 3d | v4.0 | CTRL+Right-click context menu, Zen Mode (hide UI), SVG export |
+
+**Minimum required scope per version:**
+- **v1.0** — Responsive infinite canvas, working camera (pan + zoom), basic stroke drawing
+- **v2.0** — Full solo drawing experience: draw, erase, undo/redo, serialized to disk
+- **v3.0** — Real-time multiplayer: live cursors + stroke sync
+- **v4.0** — Context menu, Zen Mode, SVG export, production deployment
+
+Features in the Complete Feature Spec above (layers, bookmarks, blend modes, lasso, clipboard…) are **stretch goals** beyond the contract minimum.
 
 ## Agent Docs
 Read when relevant:
