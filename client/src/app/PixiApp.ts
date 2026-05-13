@@ -114,11 +114,10 @@ export class PixiApp {
     }
 
     const rect = canvas.getBoundingClientRect();
-    const camera = this.camera.getSnapshot();
     const events = e.getCoalescedEvents?.() ?? [e];
     for (const ev of events) {
       const world = this.camera.toWorld(ev.clientX - rect.left, ev.clientY - rect.top);
-      this.brushTool.onPointerMove(world.x, world.y, ev.pressure, camera);
+      this.brushTool.onPointerMove(world.x, world.y, ev.pressure);
     }
   }
 

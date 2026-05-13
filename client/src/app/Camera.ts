@@ -2,11 +2,12 @@ import type { Camera, Viewport } from '@shared/camera';
 import { DEFAULT_CAMERA } from '@shared/camera';
 
 /**
- * float32-safe rendering limit.
- * exp(63) ≈ 4e27, well below float32 max (3.4e38).
+ * Hard cap on the rendering zoom to prevent float64 overflow (exp overflows at ~710).
+ * exp(600) ≈ 2e260, safely below float64 max (~1.8e308).
+ * StrokeRenderer independently skips strokes whose thickness would overflow float32.
  * The *conceptual* zoom (logZoom) has no limit at all.
  */
-const RENDER_LOG_LIMIT = 63;
+const RENDER_LOG_LIMIT = 600;
 
 /**
  * Manages the infinite canvas camera.

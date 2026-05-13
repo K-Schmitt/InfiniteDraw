@@ -2,22 +2,30 @@ import { Container, Graphics } from 'pixi.js';
 import type { BrushStroke } from '@shared/stroke';
 import type { Camera } from '@shared/camera';
 import { computeBoundingBox, isVisible } from './Culling';
-import { strokeToOutline } from './strokeToPath';
+import { strokeToOutline, projectToScreen } from './strokeToPath';
+
+// Skip rendering if the stroke would be wider than this many screen pixels.
+// Float32 max ≈ 3.4e38; we leave several orders of magnitude of headroom.
+const MAX_SCREEN_STROKE_WIDTH = 2e34;
 
 function colorToHex(color: BrushStroke['color']): number {
   return (color.r << 16) | (color.g << 8) | color.b;
 }
 
 /**
- * Manages a PixiJS Container of committed strokes rendered in screen space.
+ * Manages a PixiJS Container of committed strokes rendered in world space.
  *
- * The container sits directly on app.stage (NOT in a scaled worldContainer).
- * Each frame, visible strokes are redrawn using the current camera so their
- * positions track the world but their thickness stays constant in screen pixels.
+ * The world-space outline (perfect-freehand polygon) is computed ONCE when a
+ * stroke is committed and cached. Each frame only a cheap O(vertices) linear
+ * transform (world → screen) is applied, avoiding per-frame perfect-freehand calls.
+ *
+ * Strokes scale with zoom: zooming in makes them appear thicker, zooming out
+ * makes them shrink until they fall out of the viewport and are culled.
  */
 export class StrokeRenderer {
   readonly container: Container;
-  private readonly cache = new Map<string, { gfx: Graphics; stroke: BrushStroke }>();
+  private readonly cache = new Map<string, { gfx: Graphics; stroke: BrushStroke; worldOutline: number[] }>();
+  private lastCamera: Camera | null = null;
 
   constructor() {
     this.container = new Container();
@@ -25,8 +33,10 @@ export class StrokeRenderer {
 
   addStroke(stroke: BrushStroke): void {
     const gfx = new Graphics();
-    this.cache.set(stroke.id, { gfx, stroke });
+    const worldOutline = strokeToOutline(stroke);
+    this.cache.set(stroke.id, { gfx, stroke, worldOutline });
     this.container.addChild(gfx);
+    this.lastCamera = null; // force redraw on next tick
   }
 
   removeStroke(id: string): void {
@@ -35,13 +45,18 @@ export class StrokeRenderer {
     this.container.removeChild(entry.gfx);
     entry.gfx.destroy();
     this.cache.delete(id);
+    this.lastCamera = null;
   }
 
   /**
-   * Called each frame. Culls off-screen strokes and rebuilds visible ones
-   * in screen space so thickness is zoom-independent.
+   * Called each frame. Projects cached world outlines to screen and rebuilds
+   * only visible strokes. Skips entirely if the camera hasn't moved.
    */
   redraw(camera: Camera, strokes: readonly BrushStroke[], screenW: number, screenH: number): void {
+    const prev = this.lastCamera;
+    if (prev && prev.x === camera.x && prev.y === camera.y && prev.zoom === camera.zoom) return;
+    this.lastCamera = camera;
+
     const viewport = {
       x: camera.x,
       y: camera.y,
@@ -52,14 +67,21 @@ export class StrokeRenderer {
     for (const stroke of strokes) {
       const entry = this.cache.get(stroke.id);
       if (!entry) continue;
-      const visible = isVisible(computeBoundingBox(stroke, camera.zoom), viewport);
+
+      const visible = isVisible(computeBoundingBox(stroke), viewport);
       entry.gfx.visible = visible;
       if (!visible) continue;
 
-      const outline = strokeToOutline(stroke, camera);
+      // Skip strokes whose width would overflow float32 in the GPU vertex buffer.
+      if (stroke.size * camera.zoom > MAX_SCREEN_STROKE_WIDTH) {
+        entry.gfx.visible = false;
+        continue;
+      }
+
+      const screenOutline = projectToScreen(entry.worldOutline, camera);
       entry.gfx.clear();
-      if (outline.length < 6) continue;
-      entry.gfx.poly(outline).fill({ color: colorToHex(stroke.color), alpha: stroke.color.a / 255 });
+      if (screenOutline.length < 6) continue;
+      entry.gfx.poly(screenOutline).fill({ color: colorToHex(stroke.color), alpha: stroke.color.a / 255 });
     }
   }
 
