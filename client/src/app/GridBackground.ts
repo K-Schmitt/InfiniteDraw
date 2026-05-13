@@ -37,8 +37,11 @@ export class GridBackground {
 
     const startWorldX = Math.floor(camera.x / spacing) * spacing;
     const startWorldY = Math.floor(camera.y / spacing) * spacing;
-    const startScreenX = (startWorldX - camera.x) * camera.zoom;
-    const startScreenY = (startWorldY - camera.y) * camera.zoom;
+    // At extreme zoom the float64 product (startWorldX - camera.x) * zoom
+    // loses all precision and can be ±trillions of pixels, making the loop
+    // run for billions of iterations. Clamp to the only valid range [-screenSpacing, 0].
+    const startScreenX = Math.max(-screenSpacing, Math.min(0, (startWorldX - camera.x) * camera.zoom));
+    const startScreenY = Math.max(-screenSpacing, Math.min(0, (startWorldY - camera.y) * camera.zoom));
 
     for (let sx = startScreenX; sx <= screenWidth + screenSpacing; sx += screenSpacing) {
       for (let sy = startScreenY; sy <= screenHeight + screenSpacing; sy += screenSpacing) {
