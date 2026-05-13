@@ -1,5 +1,5 @@
 import type { Camera, Viewport } from '@shared/camera';
-import { DEFAULT_CAMERA, MIN_ZOOM, MAX_ZOOM } from '@shared/camera';
+import { DEFAULT_CAMERA } from '@shared/camera';
 
 /**
  * Manages the infinite canvas camera: pan, zoom, and coordinate transforms.
@@ -7,6 +7,9 @@ import { DEFAULT_CAMERA, MIN_ZOOM, MAX_ZOOM } from '@shared/camera';
  * World space is unbounded. Screen space is the CSS pixel coordinate of the canvas.
  * Transform: screenX = (worldX - camera.x) * camera.zoom
  * Inverse:   worldX  = screenX / camera.zoom + camera.x
+ *
+ * Zoom has no enforced upper or lower bound — the canvas is truly infinite.
+ * The only guard is zoom > 1e-10 to prevent division by zero.
  */
 export class CameraController {
   private state: Camera = { ...DEFAULT_CAMERA };
@@ -35,11 +38,18 @@ export class CameraController {
     this.state.y -= dy / this.state.zoom;
   }
 
-  /** Zoom by a multiplicative factor toward a screen-space point. */
+  /**
+   * Zoom by a multiplicative factor toward a screen-space pivot point.
+   * No hard limits — zoom continues indefinitely in both directions.
+   */
   zoomAt(factor: number, screenX: number, screenY: number): void {
     const worldX = this.toWorld(screenX, screenY).x;
     const worldY = this.toWorld(screenX, screenY).y;
-    this.state.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, this.state.zoom * factor));
+
+    const newZoom = this.state.zoom * factor;
+    // Only guard: prevent reaching zero (division by zero in toWorld).
+    this.state.zoom = Math.max(1e-10, newZoom);
+
     this.state.x = worldX - screenX / this.state.zoom;
     this.state.y = worldY - screenY / this.state.zoom;
   }

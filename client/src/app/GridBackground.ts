@@ -5,13 +5,17 @@ const BASE_SPACING = 50;
 const DOT_RADIUS = 1.5;
 const DOT_COLOR = 0x9e9a92;
 
+// Target screen-space dot spacing range: keep dots between these values.
+const MIN_SCREEN_SPACING = 12;
+const MAX_SCREEN_SPACING = 120;
+
 /**
  * Dot-grid layer rendered in screen space each frame.
- * The Graphics object sits on app.stage (not worldContainer) so its
- * coordinates are screen pixels — the camera transform is applied manually.
+ * Sits on app.stage (not worldContainer) — camera transform applied manually.
  *
- * Adaptive spacing: when the projected spacing would be < 12px the grid
- * steps up to the next power-of-ten multiple so dot density stays constant.
+ * Adaptive spacing: multiplies/divides base spacing by 10 until the projected
+ * screen spacing is in [MIN_SCREEN_SPACING, MAX_SCREEN_SPACING].
+ * Works for any zoom level from near-zero to arbitrarily large.
  */
 export class GridBackground {
   readonly graphics = new Graphics();
@@ -27,7 +31,6 @@ export class GridBackground {
     const startScreenX = (startWorldX - camera.x) * camera.zoom;
     const startScreenY = (startWorldY - camera.y) * camera.zoom;
 
-    // Accumulate all dots into one fill call for performance.
     for (let sx = startScreenX; sx <= screenWidth + screenSpacing; sx += screenSpacing) {
       for (let sy = startScreenY; sy <= screenHeight + screenSpacing; sy += screenSpacing) {
         this.graphics.circle(sx, sy, DOT_RADIUS);
@@ -38,8 +41,9 @@ export class GridBackground {
 }
 
 function adaptiveSpacing(base: number, zoom: number): number {
+  if (zoom <= 0) return base;
   let spacing = base;
-  while (spacing * zoom < 12) spacing *= 10;
-  while (spacing * zoom > 120) spacing /= 10;
+  while (spacing * zoom < MIN_SCREEN_SPACING) spacing *= 10;
+  while (spacing * zoom > MAX_SCREEN_SPACING) spacing /= 10;
   return spacing;
 }

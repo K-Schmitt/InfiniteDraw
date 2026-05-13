@@ -4,7 +4,8 @@
  * The Camera defines the current view into the infinite world.
  * All stroke coordinates are in world space; the Camera transforms them to screen space.
  *
- * Screen = (World - Camera.origin) * Camera.zoom
+ * Transform:  screenX = (worldX - camera.x) * camera.zoom
+ * Inverse:    worldX  = screenX / camera.zoom + camera.x
  */
 
 export interface Camera {
@@ -12,7 +13,11 @@ export interface Camera {
   x: number;
   /** World-space y-coordinate of the camera origin (top edge of viewport). */
   y: number;
-  /** Zoom scale factor. 1.0 = 100%, 2.0 = 200%, 0.5 = 50%. Range: 0.01–100. */
+  /**
+   * Zoom scale factor. 1.0 = 100%, 2.0 = 200%, 0.5 = 50%.
+   * No enforced limits — the canvas is infinite in both directions.
+   * Clamped only to > 0 to prevent division by zero.
+   */
   zoom: number;
 }
 
@@ -36,6 +41,3 @@ export const DEFAULT_CAMERA: Camera = {
   y: 0,
   zoom: 1.0,
 };
-
-export const MIN_ZOOM = 0.01;
-export const MAX_ZOOM = 100.0;

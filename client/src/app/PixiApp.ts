@@ -83,7 +83,7 @@ export class PixiApp {
     const viewport = this.camera.getViewport(width, height);
     this.renderer.updateCulling(viewport, this.state.strokes);
 
-    this.zoomHud.textContent = `${Math.round(this.camera.zoom * 100)}%`;
+    this.zoomHud.textContent = formatZoom(this.camera.zoom);
   }
 
   private setupInput(canvas: HTMLCanvasElement): void {
@@ -157,6 +157,17 @@ export class PixiApp {
     const rect = canvas.getBoundingClientRect();
     return this.camera.toWorld(e.clientX - rect.left, e.clientY - rect.top);
   }
+}
+
+/**
+ * Formats the zoom level for the HUD at any scale.
+ * Examples: 0.00001× → "0.00001×", 1× → "1×", 1500× → "1500×"
+ */
+function formatZoom(zoom: number): string {
+  if (zoom >= 100) return `${Math.round(zoom)}×`;
+  if (zoom >= 1)   return `${parseFloat(zoom.toFixed(1))}×`;
+  if (zoom >= 0.1) return `${parseFloat(zoom.toFixed(2))}×`;
+  return `${zoom.toPrecision(2)}×`;
 }
 
 function applyRendererInstruction(

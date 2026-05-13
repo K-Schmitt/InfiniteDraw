@@ -49,12 +49,15 @@ describe('CameraController', () => {
     expect(worldAfter.y).toBeCloseTo(worldBefore.y);
   });
 
-  it('zoom clamps to MIN and MAX', () => {
-    for (let i = 0; i < 200; i++) camera.zoomAt(10, 0, 0);
-    expect(camera.zoom).toBe(100);
+  it('zoom is unbounded — grows and shrinks far beyond old limits', () => {
+    for (let i = 0; i < 50; i++) camera.zoomAt(10, 0, 0);
+    expect(camera.zoom).toBeGreaterThan(1e40); // no upper wall
 
-    for (let i = 0; i < 200; i++) camera.zoomAt(0.1, 0, 0);
-    expect(camera.zoom).toBe(0.01);
+    camera.restore({ x: 0, y: 0, zoom: 1 });
+    for (let i = 0; i < 50; i++) camera.zoomAt(0.1, 0, 0);
+    // Old MIN_ZOOM was 0.01. Zoom now reaches the anti-zero guard (1e-10).
+    expect(camera.zoom).toBeLessThan(0.0001);
+    expect(camera.zoom).toBeGreaterThan(0); // never reaches zero (div-by-zero guard)
   });
 
   it('getViewport matches world-space area', () => {
