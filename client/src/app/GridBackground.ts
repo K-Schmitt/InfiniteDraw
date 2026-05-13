@@ -5,17 +5,18 @@ const BASE_SPACING = 50;
 const DOT_RADIUS = 1.5;
 const DOT_COLOR = 0x9e9a92;
 
-// Target screen-space dot spacing range: keep dots between these values.
-const MIN_SCREEN_SPACING = 12;
-const MAX_SCREEN_SPACING = 120;
+// Target ~50px between dots on screen.
+// O(1) formula: spacing = BASE * 10^n where n = ceil(log10(TARGET / (BASE * zoom))).
+// This avoids the while-loop power-of-10 hunt and its discontinuous dot-count jumps.
+const TARGET_SCREEN_SPACING = 50;
+
+// Hard cap so the grid never draws more than this many circles per frame.
+// Above this we simply return — an empty grid is better than a frozen tab.
+const MAX_DOTS = 3000;
 
 /**
  * Dot-grid layer rendered in screen space each frame.
  * Sits on app.stage (not worldContainer) — camera transform applied manually.
- *
- * Adaptive spacing: multiplies/divides base spacing by 10 until the projected
- * screen spacing is in [MIN_SCREEN_SPACING, MAX_SCREEN_SPACING].
- * Works for any zoom level from near-zero to arbitrarily large.
  */
 export class GridBackground {
   readonly graphics = new Graphics();
@@ -23,8 +24,16 @@ export class GridBackground {
   draw(camera: Camera, screenWidth: number, screenHeight: number): void {
     this.graphics.clear();
 
+    if (!isFinite(camera.zoom) || camera.zoom <= 0) return;
+
     const spacing = adaptiveSpacing(BASE_SPACING, camera.zoom);
     const screenSpacing = spacing * camera.zoom;
+
+    if (!isFinite(screenSpacing) || screenSpacing <= 0) return;
+
+    const cols = Math.ceil(screenWidth / screenSpacing) + 2;
+    const rows = Math.ceil(screenHeight / screenSpacing) + 2;
+    if (cols * rows > MAX_DOTS) return;
 
     const startWorldX = Math.floor(camera.x / spacing) * spacing;
     const startWorldY = Math.floor(camera.y / spacing) * spacing;
@@ -40,10 +49,14 @@ export class GridBackground {
   }
 }
 
+/**
+ * Returns the world-space grid spacing in O(1), no while loops.
+ * Picks BASE * 10^n such that the projected screen spacing is nearest
+ * to TARGET_SCREEN_SPACING.
+ */
 function adaptiveSpacing(base: number, zoom: number): number {
-  if (zoom <= 0) return base;
-  let spacing = base;
-  while (spacing * zoom < MIN_SCREEN_SPACING) spacing *= 10;
-  while (spacing * zoom > MAX_SCREEN_SPACING) spacing /= 10;
-  return spacing;
+  if (zoom <= 0 || !isFinite(zoom)) return base;
+  // n = round(log10(TARGET / (base * zoom)))
+  const n = Math.round(Math.log10(TARGET_SCREEN_SPACING / (base * zoom)));
+  return base * Math.pow(10, n);
 }
