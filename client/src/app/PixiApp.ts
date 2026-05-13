@@ -36,7 +36,7 @@ export class PixiApp {
   async init(container: HTMLElement): Promise<void> {
     this.app = new Application();
     await this.app.init({
-      resizeTo: container,
+      resizeTo: window,
       backgroundColor: 0xf5f0e8,
       antialias: true,
       preference: 'webgl',
@@ -45,8 +45,6 @@ export class PixiApp {
     });
 
     container.appendChild(this.app.canvas as HTMLCanvasElement);
-    // Force correct dimensions now that the canvas is in the DOM.
-    this.app.resize();
 
     this.camera = new CameraController();
     this.state = new CanvasState();
@@ -83,7 +81,7 @@ export class PixiApp {
     const viewport = this.camera.getViewport(width, height);
     this.renderer.updateCulling(viewport, this.state.strokes);
 
-    this.zoomHud.textContent = formatZoom(this.camera.zoom);
+    this.zoomHud.textContent = formatZoom(this.camera.logZoom);
   }
 
   private setupInput(canvas: HTMLCanvasElement): void {
@@ -160,14 +158,19 @@ export class PixiApp {
 }
 
 /**
- * Formats the zoom level for the HUD at any scale.
- * Examples: 0.00001× → "0.00001×", 1× → "1×", 1500× → "1500×"
+ * Formats the conceptual zoom (logZoom = ln(zoom)) for the HUD.
+ * Shows a multiplier in normal range, or power-of-10 notation at extremes.
+ * logZoom accumulates forever so this always changes — no visual "wall".
  */
-function formatZoom(zoom: number): string {
-  if (zoom >= 100) return `${Math.round(zoom)}×`;
-  if (zoom >= 1)   return `${parseFloat(zoom.toFixed(1))}×`;
-  if (zoom >= 0.1) return `${parseFloat(zoom.toFixed(2))}×`;
-  return `${zoom.toPrecision(2)}×`;
+function formatZoom(logZoom: number): string {
+  const log10 = logZoom / Math.LN10;
+  if (Math.abs(log10) < 3) {
+    const zoom = Math.exp(logZoom);
+    if (zoom >= 100) return `${Math.round(zoom)}×`;
+    if (zoom >= 1)   return `${zoom.toFixed(1)}×`;
+    return `${zoom.toFixed(3)}×`;
+  }
+  return `10^${Math.round(log10)}`;
 }
 
 function applyRendererInstruction(

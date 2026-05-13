@@ -12,6 +12,7 @@ describe('CameraController', () => {
     expect(camera.x).toBe(0);
     expect(camera.y).toBe(0);
     expect(camera.zoom).toBe(1);
+    expect(camera.logZoom).toBe(0);
   });
 
   it('toWorld is identity at default state', () => {
@@ -29,19 +30,18 @@ describe('CameraController', () => {
   });
 
   it('pan shifts camera origin in world space', () => {
-    camera.pan(100, 0); // drag right 100px at zoom 1
+    camera.pan(100, 0);
     expect(camera.x).toBeCloseTo(-100);
     expect(camera.y).toBe(0);
   });
 
   it('pan accounts for zoom', () => {
-    camera.zoomAt(2, 0, 0); // zoom 2x at origin
-    camera.pan(100, 0);     // 100 screen px = 50 world units
+    camera.zoomAt(2, 0, 0);
+    camera.pan(100, 0);
     expect(camera.x).toBeCloseTo(-50);
   });
 
   it('zoomAt preserves the world point under the cursor', () => {
-    // World point (50, 50) is at screen (50, 50) before zoom.
     const worldBefore = camera.toWorld(50, 50);
     camera.zoomAt(2, 50, 50);
     const worldAfter = camera.toWorld(50, 50);
@@ -49,15 +49,19 @@ describe('CameraController', () => {
     expect(worldAfter.y).toBeCloseTo(worldBefore.y);
   });
 
-  it('zoom is unbounded — grows and shrinks far beyond old limits', () => {
-    for (let i = 0; i < 50; i++) camera.zoomAt(10, 0, 0);
-    expect(camera.zoom).toBeGreaterThan(1e40); // no upper wall
+  it('logZoom accumulates freely — no walls in either direction', () => {
+    // Zoom in: logZoom grows without bound, rendering zoom stays finite.
+    for (let i = 0; i < 5000; i++) camera.zoomAt(1.12, 0, 0);
+    expect(camera.logZoom).toBeGreaterThan(500);  // way past any old limit
+    expect(isFinite(camera.zoom)).toBe(true);     // rendering zoom never Infinity
+    expect(camera.zoom).toBeGreaterThan(0);
 
+    // Zoom out: logZoom goes deeply negative, rendering zoom stays > 0.
     camera.restore({ x: 0, y: 0, zoom: 1 });
-    for (let i = 0; i < 50; i++) camera.zoomAt(0.1, 0, 0);
-    // Old MIN_ZOOM was 0.01. Zoom now reaches the anti-zero guard (1e-10).
-    expect(camera.zoom).toBeLessThan(0.0001);
-    expect(camera.zoom).toBeGreaterThan(0); // never reaches zero (div-by-zero guard)
+    for (let i = 0; i < 5000; i++) camera.zoomAt(1 / 1.12, 0, 0);
+    expect(camera.logZoom).toBeLessThan(-500);    // way past any old limit
+    expect(isFinite(camera.zoom)).toBe(true);
+    expect(camera.zoom).toBeGreaterThan(0);        // rendering zoom never 0
   });
 
   it('getViewport matches world-space area', () => {
