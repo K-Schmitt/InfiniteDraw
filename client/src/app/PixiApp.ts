@@ -45,6 +45,8 @@ export class PixiApp {
     });
 
     container.appendChild(this.app.canvas as HTMLCanvasElement);
+    // Force correct dimensions now that the canvas is in the DOM.
+    this.app.resize();
 
     this.camera = new CameraController();
     this.state = new CanvasState();
