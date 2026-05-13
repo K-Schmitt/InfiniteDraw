@@ -1,9 +1,9 @@
 import { Graphics } from 'pixi.js';
 import type { BrushStroke, Color } from '@shared/stroke';
+import type { Camera } from '@shared/camera';
 import { StrokeRecorder } from '../drawing/StrokeRecorder';
 import { strokeToOutline } from '../drawing/strokeToPath';
 
-/** Active brush configuration — will be driven by UI state in Step 3+. */
 export interface BrushConfig {
   color: Color;
   size: number;
@@ -20,7 +20,8 @@ const DEFAULT_CONFIG: BrushConfig = {
  * Handles freehand brush drawing.
  *
  * Receives world-space coordinates from PixiApp (already converted from screen).
- * Owns a Graphics object for the live preview — must be added to the world container.
+ * The preview is rendered in screen space — same constant-thickness approach as
+ * StrokeRenderer — so committing a stroke never causes a size jump.
  */
 export class BrushTool {
   readonly previewGraphics = new Graphics();
@@ -41,10 +42,10 @@ export class BrushTool {
     });
   }
 
-  onPointerMove(worldX: number, worldY: number, pressure: number): void {
+  onPointerMove(worldX: number, worldY: number, pressure: number, camera: Camera): void {
     if (!this.recorder.isRecording()) return;
     this.recorder.addPoint(worldX, worldY, pressure);
-    this.redrawPreview();
+    this.buildPreview(camera);
   }
 
   onPointerUp(): void {
@@ -60,17 +61,21 @@ export class BrushTool {
     this.previewGraphics.clear();
   }
 
-  private redrawPreview(): void {
+  /** Call each tick to keep the preview aligned when the camera moves while drawing. */
+  refreshPreview(camera: Camera): void {
+    if (!this.recorder.isRecording()) return;
+    this.buildPreview(camera);
+  }
+
+  private buildPreview(camera: Camera): void {
     const stroke = this.recorder.getPreviewStroke();
     if (!stroke || stroke.points.length < 2) return;
 
-    const outline = strokeToOutline(stroke as BrushStroke);
+    const outline = strokeToOutline(stroke as BrushStroke, camera);
+    this.previewGraphics.clear();
     if (outline.length < 6) return;
 
     const hex = (stroke.color.r << 16) | (stroke.color.g << 8) | stroke.color.b;
-    const alpha = stroke.color.a / 255;
-
-    this.previewGraphics.clear();
-    this.previewGraphics.poly(outline).fill({ color: hex, alpha });
+    this.previewGraphics.poly(outline).fill({ color: hex, alpha: stroke.color.a / 255 });
   }
 }

@@ -8,13 +8,16 @@ export interface BoundingBox {
   maxY: number;
 }
 
-/** Computes the world-space AABB for a stroke, including size padding. */
-export function computeBoundingBox(stroke: BrushStroke): BoundingBox {
+/**
+ * Computes the world-space AABB for a stroke, including size padding.
+ * stroke.size is in screen pixels; zoom converts it to world units.
+ */
+export function computeBoundingBox(stroke: BrushStroke, zoom = 1): BoundingBox {
   if (stroke.points.length === 0) {
     return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   }
 
-  const pad = stroke.size / 2;
+  const pad = stroke.size / (2 * zoom);
   let minX = stroke.points[0]!.x;
   let minY = stroke.points[0]!.y;
   let maxX = minX;

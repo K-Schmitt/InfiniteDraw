@@ -1,4 +1,4 @@
-import { Application, Container } from 'pixi.js';
+import { Application } from 'pixi.js';
 import { CameraController } from './Camera';
 import { GridBackground } from './GridBackground';
 import { StrokeRenderer } from '../drawing/StrokeRenderer';
@@ -12,16 +12,17 @@ const ZOOM_FACTOR = 1.12;
  *   PixiJS (rendering) ← CameraController (transform) ← pointer/wheel events
  *   BrushTool (input) → CanvasState (data) → StrokeRenderer (display)
  *
- * Stage hierarchy:
+ * Stage hierarchy (all in screen space — no scaled worldContainer):
  *   app.stage
- *     ├── grid.graphics          (screen-space dot grid, redrawn each frame)
- *     └── worldContainer         (camera transform applied every tick)
- *           ├── renderer.container   (committed strokes)
- *           └── brushTool.previewGraphics  (live preview)
+ *     ├── grid.graphics          (dot grid, redrawn each frame)
+ *     ├── renderer.container     (committed strokes, rebuilt each frame)
+ *     └── brushTool.previewGraphics  (live stroke preview)
+ *
+ * Strokes are rendered in screen space each frame so their on-screen thickness
+ * stays constant regardless of zoom level.
  */
 export class PixiApp {
   private app!: Application;
-  private worldContainer!: Container;
   private camera!: CameraController;
   private grid!: GridBackground;
   private state!: CanvasState;
@@ -53,17 +54,14 @@ export class PixiApp {
     this.grid = new GridBackground();
     this.app.stage.addChild(this.grid.graphics);
 
-    this.worldContainer = new Container();
-    this.app.stage.addChild(this.worldContainer);
-
     this.renderer = new StrokeRenderer();
-    this.worldContainer.addChild(this.renderer.container);
+    this.app.stage.addChild(this.renderer.container);
 
     this.brushTool = new BrushTool((stroke) => {
       this.state.addStroke(stroke);
       this.renderer.addStroke(stroke);
     });
-    this.worldContainer.addChild(this.brushTool.previewGraphics);
+    this.app.stage.addChild(this.brushTool.previewGraphics);
 
     this.setupInput(this.app.canvas as HTMLCanvasElement);
     this.app.ticker.add(() => this.tick());
@@ -71,15 +69,11 @@ export class PixiApp {
 
   private tick(): void {
     const { width, height } = this.app.screen;
+    const camera = this.camera.getSnapshot();
 
-    this.grid.draw(this.camera.getSnapshot(), width, height);
-
-    this.worldContainer.scale.set(this.camera.zoom);
-    this.worldContainer.x = -this.camera.x * this.camera.zoom;
-    this.worldContainer.y = -this.camera.y * this.camera.zoom;
-
-    const viewport = this.camera.getViewport(width, height);
-    this.renderer.updateCulling(viewport, this.state.strokes);
+    this.grid.draw(camera, width, height);
+    this.renderer.redraw(camera, this.state.strokes, width, height);
+    this.brushTool.refreshPreview(camera);
 
     this.zoomHud.textContent = formatZoom(this.camera.logZoom);
   }
@@ -119,10 +113,12 @@ export class PixiApp {
       return;
     }
 
+    const rect = canvas.getBoundingClientRect();
+    const camera = this.camera.getSnapshot();
     const events = e.getCoalescedEvents?.() ?? [e];
     for (const ev of events) {
-      const world = this.toWorld(ev, canvas);
-      this.brushTool.onPointerMove(world.x, world.y, ev.pressure);
+      const world = this.camera.toWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+      this.brushTool.onPointerMove(world.x, world.y, ev.pressure, camera);
     }
   }
 
@@ -157,11 +153,6 @@ export class PixiApp {
   }
 }
 
-/**
- * Formats the conceptual zoom (logZoom = ln(zoom)) for the HUD.
- * Shows a multiplier in normal range, or power-of-10 notation at extremes.
- * logZoom accumulates forever so this always changes — no visual "wall".
- */
 function formatZoom(logZoom: number): string {
   const log10 = logZoom / Math.LN10;
   if (Math.abs(log10) < 3) {
