@@ -20,8 +20,19 @@ const MAX_DOTS = 3000;
  */
 export class GridBackground {
   readonly graphics = new Graphics();
+  private last = { x: NaN, y: NaN, zoom: NaN, w: NaN, h: NaN };
 
   draw(camera: Camera, screenWidth: number, screenHeight: number): void {
+    // Skip the full redraw (clear + up to MAX_DOTS circles) when nothing changed —
+    // e.g. while drawing with a static camera, or when idle.
+    if (
+      camera.x === this.last.x && camera.y === this.last.y && camera.zoom === this.last.zoom &&
+      screenWidth === this.last.w && screenHeight === this.last.h
+    ) {
+      return;
+    }
+    this.last = { x: camera.x, y: camera.y, zoom: camera.zoom, w: screenWidth, h: screenHeight };
+
     this.graphics.clear();
 
     if (!isFinite(camera.zoom) || camera.zoom <= 0) return;

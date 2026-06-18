@@ -2,7 +2,12 @@ import { Graphics } from 'pixi.js';
 import type { BrushStroke, Color } from '@shared/stroke';
 import type { Camera } from '@shared/camera';
 import { StrokeRecorder } from '../drawing/StrokeRecorder';
-import { strokeToOutline, projectToScreen } from '../drawing/strokeToPath';
+import { strokeToRings } from '../drawing/strokeToPath';
+import { fillRings, type FillOptions } from '../drawing/fillRings';
+
+// above this threshold the ring resolution is throttled to avoid blocking the frame loop
+const PREVIEW_FRAME_RESOLVE_LIMIT = 300;
+const PREVIEW_THROTTLE_MS = 33;
 
 export interface BrushConfig {
   color: Color;
@@ -16,28 +21,29 @@ const DEFAULT_CONFIG: BrushConfig = {
   layerId: 'default',
 };
 
-/**
- * Handles freehand brush drawing.
- *
- * Receives world-space coordinates from PixiApp (already converted from screen).
- * The preview uses the same world→screen projection as StrokeRenderer so its
- * appearance matches the committed stroke at all zoom levels.
- */
 export class BrushTool {
   readonly previewGraphics = new Graphics();
   private readonly recorder = new StrokeRecorder();
   config: BrushConfig = { ...DEFAULT_CONFIG };
 
+  private previewRings: number[][] = [];
+  private previewPointCount = 0;
+  private lastResolveAt = 0;
+
   constructor(private readonly onCommit: (stroke: BrushStroke) => void) {}
 
-  onPointerDown(worldX: number, worldY: number, pressure: number): void {
+  onPointerDown(
+    world: { readonly x: number; readonly y: number },
+    pressure: number,
+    zoom: number,
+  ): void {
     this.recorder.begin({
       id: crypto.randomUUID(),
       color: { ...this.config.color },
-      size: this.config.size,
+      size: this.config.size / zoom, // apparent screen size stays constant regardless of zoom
       layerId: this.config.layerId,
-      x: worldX,
-      y: worldY,
+      x: world.x,
+      y: world.y,
       pressure,
     });
   }
@@ -48,7 +54,7 @@ export class BrushTool {
   }
 
   onPointerUp(): void {
-    this.previewGraphics.clear();
+    this.resetPreview();
     const stroke = this.recorder.commit();
     if (stroke && stroke.points.length >= 2) {
       this.onCommit(stroke);
@@ -57,24 +63,39 @@ export class BrushTool {
 
   cancel(): void {
     this.recorder.cancel();
-    this.previewGraphics.clear();
+    this.resetPreview();
   }
 
-  /**
-   * Called each tick. Rebuilds the live preview using the current camera so the
-   * preview stays aligned when the camera moves while drawing.
-   */
+  private resetPreview(): void {
+    this.previewGraphics.clear();
+    this.previewRings = [];
+    this.previewPointCount = 0;
+    this.lastResolveAt = 0;
+  }
+
+  // resolves rings + holes every frame (light strokes) or throttled (heavy) so closed shapes preview correctly
   refreshPreview(camera: Camera): void {
     if (!this.recorder.isRecording()) return;
     const stroke = this.recorder.getPreviewStroke();
     if (!stroke || stroke.points.length < 2) return;
 
-    const worldOutline = strokeToOutline(stroke as BrushStroke);
-    this.previewGraphics.clear();
-    if (worldOutline.length < 6) return;
+    const grew = stroke.points.length !== this.previewPointCount;
+    const light = stroke.points.length <= PREVIEW_FRAME_RESOLVE_LIMIT;
+    const now = performance.now();
+    if (grew && (light || now - this.lastResolveAt >= PREVIEW_THROTTLE_MS)) {
+      this.previewRings = strokeToRings(stroke as BrushStroke);
+      this.previewPointCount = stroke.points.length;
+      this.lastResolveAt = now;
+    }
 
-    const screenOutline = projectToScreen(worldOutline, camera);
-    const hex = (stroke.color.r << 16) | (stroke.color.g << 8) | stroke.color.b;
-    this.previewGraphics.poly(screenOutline).fill({ color: hex, alpha: stroke.color.a / 255 });
+    this.previewGraphics.clear();
+    const opts: FillOptions = {
+      originX: camera.x,
+      originY: camera.y,
+      scale: camera.zoom,
+      color: (stroke.color.r << 16) | (stroke.color.g << 8) | stroke.color.b,
+      alpha: stroke.color.a / 255,
+    };
+    fillRings(this.previewGraphics, this.previewRings, opts);
   }
 }

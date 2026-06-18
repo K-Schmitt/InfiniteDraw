@@ -7,20 +7,6 @@ import { CanvasState } from '../state/CanvasState';
 
 const ZOOM_FACTOR = 1.12;
 
-/**
- * Root application class. Wires together:
- *   PixiJS (rendering) ← CameraController (transform) ← pointer/wheel events
- *   BrushTool (input) → CanvasState (data) → StrokeRenderer (display)
- *
- * Stage hierarchy (all in screen space — no scaled worldContainer):
- *   app.stage
- *     ├── grid.graphics          (dot grid, redrawn each frame)
- *     ├── renderer.container     (committed strokes, rebuilt each frame)
- *     └── brushTool.previewGraphics  (live stroke preview)
- *
- * Strokes are rendered in screen space each frame so their on-screen thickness
- * stays constant regardless of zoom level.
- */
 export class PixiApp {
   private app!: Application;
   private camera!: CameraController;
@@ -36,16 +22,21 @@ export class PixiApp {
 
   async init(container: HTMLElement): Promise<void> {
     this.app = new Application();
+    // ≥2× device pixels: fixes blur on Linux where browser under-reports devicePixelRatio
+    const renderResolution = Math.max(window.devicePixelRatio || 1, 2);
     await this.app.init({
       resizeTo: window,
       backgroundColor: 0xf5f0e8,
       antialias: true,
       preference: 'webgl',
-      resolution: window.devicePixelRatio,
+      resolution: renderResolution,
       autoDensity: true,
     });
 
     container.appendChild(this.app.canvas as HTMLCanvasElement);
+    console.info(
+      `[InfinityBoard] devicePixelRatio=${window.devicePixelRatio} → renderResolution=${renderResolution}`,
+    );
 
     this.camera = new CameraController();
     this.state = new CanvasState();
@@ -54,7 +45,7 @@ export class PixiApp {
     this.grid = new GridBackground();
     this.app.stage.addChild(this.grid.graphics);
 
-    this.renderer = new StrokeRenderer();
+    this.renderer = new StrokeRenderer(this.app.renderer);
     this.app.stage.addChild(this.renderer.container);
 
     this.brushTool = new BrushTool((stroke) => {
@@ -72,7 +63,7 @@ export class PixiApp {
     const camera = this.camera.getSnapshot();
 
     this.grid.draw(camera, width, height);
-    this.renderer.redraw(camera, this.state.strokes, width, height);
+    this.renderer.redraw(camera, width, height);
     this.brushTool.refreshPreview(camera);
 
     this.zoomHud.textContent = formatZoom(this.camera.logZoom);
@@ -102,7 +93,7 @@ export class PixiApp {
 
     canvas.setPointerCapture(e.pointerId);
     const world = this.toWorld(e, canvas);
-    this.brushTool.onPointerDown(world.x, world.y, e.pressure);
+    this.brushTool.onPointerDown(world, e.pressure, this.camera.zoom);
   }
 
   private handlePointerMove(e: PointerEvent, canvas: HTMLCanvasElement): void {
