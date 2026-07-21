@@ -13,7 +13,10 @@ import type { Layer } from './layer.js';
 import type { CameraBookmark } from './camera.js';
 
 /** Current file format version. Increment on breaking format changes. */
-export const FILE_FORMAT_VERSION = 1;
+export const FILE_FORMAT_VERSION = 2;
+
+/** Magic number at the very start of a journal file (ASCII "IDRW"). */
+export const FILE_MAGIC = 0x49445257;
 
 /**
  * Key-value metadata stored in the file header.
