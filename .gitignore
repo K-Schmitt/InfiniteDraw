@@ -41,3 +41,11 @@ saves/
 # Vite cache
 client/.vite/
 .gitnexus
+
+# Agent / assistant context (local only)
+docs/
+AGENTS.md
+CLAUDE.md
+NOTES.md
+.nodalis/
+.claude/
