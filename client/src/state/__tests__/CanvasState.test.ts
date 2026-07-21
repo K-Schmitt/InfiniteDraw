@@ -39,7 +39,7 @@ describe('CanvasState', () => {
   it('undo removes the last added stroke', () => {
     state.addStroke(makeStroke('a'));
     const result = state.undo();
-    expect(result).toEqual({ action: 'remove', strokeId: 'a' });
+    expect(result).toEqual([{ action: 'remove', strokeId: 'a' }]);
     expect(state.strokes).toHaveLength(0);
   });
 
@@ -48,17 +48,17 @@ describe('CanvasState', () => {
     state.addStroke(s);
     state.undo();
     const result = state.redo();
-    expect(result?.action).toBe('add');
+    expect(result[0]?.action).toBe('add');
     expect(state.strokes).toHaveLength(1);
   });
 
-  it('undo returns undefined when nothing to undo', () => {
-    expect(state.undo()).toBeUndefined();
+  it('undo returns empty when nothing to undo', () => {
+    expect(state.undo()).toEqual([]);
   });
 
-  it('redo returns undefined when at latest state', () => {
+  it('redo returns empty when at latest state', () => {
     state.addStroke(makeStroke('a'));
-    expect(state.redo()).toBeUndefined();
+    expect(state.redo()).toEqual([]);
   });
 
   it('new action after undo truncates redo history', () => {
@@ -82,8 +82,37 @@ describe('CanvasState', () => {
     state.addStroke(makeStroke('a'));
     state.deleteStroke('a');
     const result = state.undo();
-    expect(result?.action).toBe('add');
+    expect(result[0]?.action).toBe('add');
     expect(state.strokes).toHaveLength(1);
+  });
+
+  it('replaceStrokes swaps one stroke for many in a single undo step', () => {
+    state.addStroke(makeStroke('a'));
+    state.replaceStrokes(['a'], [makeStroke('a1'), makeStroke('a2')]);
+    expect(state.strokes.map((s) => s.id)).toEqual(['a1', 'a2']);
+
+    const undo = state.undo();
+    expect(state.strokes.map((s) => s.id)).toEqual(['a']);
+    expect(undo).toEqual([
+      { action: 'remove', strokeId: 'a1' },
+      { action: 'remove', strokeId: 'a2' },
+      { action: 'add', stroke: expect.objectContaining({ id: 'a' }) },
+    ]);
+
+    state.redo();
+    expect(state.strokes.map((s) => s.id)).toEqual(['a1', 'a2']);
+  });
+
+  it('recolor changes a stroke color and undo restores it', () => {
+    const s = makeStroke('a');
+    s.color = { r: 10, g: 10, b: 10, a: 255 };
+    state.addStroke(s);
+    state.recolor('a', { r: 200, g: 0, b: 0, a: 255 });
+    expect(state.strokes[0]!.color).toEqual({ r: 200, g: 0, b: 0, a: 255 });
+
+    const undo = state.undo();
+    expect(undo).toEqual([{ action: 'recolor', strokeId: 'a', color: { r: 10, g: 10, b: 10, a: 255 } }]);
+    expect(state.strokes[0]!.color).toEqual({ r: 10, g: 10, b: 10, a: 255 });
   });
 
   it('multiple undo/redo cycles are consistent', () => {

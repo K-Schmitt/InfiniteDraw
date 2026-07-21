@@ -35,7 +35,8 @@ export function bakeTile(tile: TileCoord, store: StrokeStore, renderer: Renderer
   let drew = false;
 
   for (const item of items) {
-    if (item.stroke.size * localZoom < MIN_TEXEL) continue;
+    // filled regions have area, not a stroke width — never omit them by texel thinness
+    if (!item.stroke.filled && item.stroke.size * localZoom < MIN_TEXEL) continue;
     if (fillRings(gfx, item.rings, colorToFillOptions(item.stroke.color, origin, localZoom))) drew = true;
   }
 

@@ -21,6 +21,7 @@ export const StrokeType = {
   LINE: 2,
   RECTANGLE: 3,
   ELLIPSE: 4,
+  TRIANGLE: 5,
 } as const;
 
 export type StrokeType = (typeof StrokeType)[keyof typeof StrokeType];
@@ -57,6 +58,16 @@ export interface BrushStroke {
   pressures: number[];
   layerId: string;
   createdAt: number;
+  /**
+   * When true the `points` describe a solid polygon to fill (paint-bucket / filled
+   * shapes, or eraser remnants) instead of a centerline traced by perfect-freehand.
+   * Optional so existing brush/line/outline strokes are unaffected.
+   */
+  filled?: boolean;
+  /** Inner rings cut out of a filled polygon (e.g. an erased hole). Only used when `filled`. */
+  holes?: Point[][];
+  /** Paint-bucket fills render behind outlines so borders stay visible. */
+  background?: boolean;
 }
 
 /**

@@ -1,11 +1,33 @@
 import { Application } from 'pixi.js';
+import type { BrushStroke, Color } from '@shared/stroke';
 import { CameraController } from './Camera';
 import { GridBackground } from './GridBackground';
 import { StrokeRenderer } from '../drawing/StrokeRenderer';
-import { BrushTool } from '../tools/BrushTool';
-import { CanvasState } from '../state/CanvasState';
+import { CanvasState, type RendererInstruction } from '../state/CanvasState';
+import { ToolManager, type ToolId } from '../tools/ToolManager';
+import type { ToolSettings, ToolContext, CanvasApi } from '../tools/Tool';
+import { Toolbar } from '../ui/Toolbar';
 
 const ZOOM_FACTOR = 1.12;
+
+const SHORTCUTS: Record<string, ToolId> = {
+  b: 'brush',
+  l: 'line',
+  r: 'shape',
+  e: 'eraser',
+  f: 'fill',
+  i: 'eyedropper',
+};
+
+function defaultSettings(): ToolSettings {
+  return {
+    primary: { r: 20, g: 20, b: 20, a: 255 },
+    secondary: { r: 255, g: 255, b: 255, a: 255 },
+    size: 8,
+    shape: 'rectangle',
+    layerId: 'default',
+  };
+}
 
 export class PixiApp {
   private app!: Application;
@@ -13,8 +35,10 @@ export class PixiApp {
   private grid!: GridBackground;
   private state!: CanvasState;
   private renderer!: StrokeRenderer;
-  private brushTool!: BrushTool;
+  private tools!: ToolManager;
+  private toolbar!: Toolbar;
   private zoomHud!: HTMLElement;
+  private readonly settings = defaultSettings();
 
   private isPanning = false;
   private lastPanX = 0;
@@ -22,7 +46,7 @@ export class PixiApp {
 
   async init(container: HTMLElement): Promise<void> {
     this.app = new Application();
-    // ≥2× device pixels: fixes blur on Linux where browser under-reports devicePixelRatio
+    // ≥2× device pixels: fixes blur on Linux where the browser under-reports devicePixelRatio
     const renderResolution = Math.max(window.devicePixelRatio || 1, 2);
     await this.app.init({
       resizeTo: window,
@@ -32,11 +56,7 @@ export class PixiApp {
       resolution: renderResolution,
       autoDensity: true,
     });
-
     container.appendChild(this.app.canvas as HTMLCanvasElement);
-    console.info(
-      `[InfinityBoard] devicePixelRatio=${window.devicePixelRatio} → renderResolution=${renderResolution}`,
-    );
 
     this.camera = new CameraController();
     this.state = new CanvasState();
@@ -44,44 +64,72 @@ export class PixiApp {
 
     this.grid = new GridBackground();
     this.app.stage.addChild(this.grid.graphics);
-
     this.renderer = new StrokeRenderer(this.app.renderer);
     this.app.stage.addChild(this.renderer.container);
 
-    this.brushTool = new BrushTool((stroke) => {
-      this.state.addStroke(stroke);
-      this.renderer.addStroke(stroke);
-    });
-    this.app.stage.addChild(this.brushTool.previewGraphics);
+    this.tools = new ToolManager(this.settings, this.createCanvasApi(), (c) => this.applyPick(c));
+    this.app.stage.addChild(this.tools.previewLayer);
+    this.toolbar = new Toolbar(this.settings, this.tools);
+    document.body.appendChild(this.toolbar.root);
 
     this.setupInput(this.app.canvas as HTMLCanvasElement);
     this.app.ticker.add(() => this.tick());
   }
 
+  private createCanvasApi(): CanvasApi {
+    return {
+      add: (stroke) => this.commit(stroke),
+      eraseLive: (removeIds, additions) => this.eraseLive(removeIds, additions),
+      eraseEnd: () => this.state.commitErase(),
+      strokesNear: (bbox) => this.renderer.strokesNear(bbox),
+      pickColorAt: (world) => this.renderer.pickColorAt(world),
+      fillTarget: (world, color) => this.renderer.fillTarget(world, color),
+      recolorMany: (ids, color) => this.recolorMany(ids, color),
+    };
+  }
+
+  private recolorMany(ids: readonly string[], color: Color): void {
+    this.state.recolorMany(ids, color);
+    for (const id of ids) this.renderer.recolorStroke(id, color);
+  }
+
+  private commit(stroke: BrushStroke): void {
+    if (!isDrawable(stroke)) return; // reject degenerate strokes made past float64-safe zoom
+    this.state.addStroke(stroke);
+    this.renderer.addStroke(stroke);
+  }
+
+  private eraseLive(removeIds: readonly string[], additions: readonly BrushStroke[]): void {
+    this.state.liveErase(removeIds, additions);
+    for (const id of removeIds) this.renderer.removeStroke(id);
+    for (const stroke of additions) this.renderer.addStroke(stroke);
+  }
+
+  private applyPick(color: Color): void {
+    this.settings.primary = color;
+    this.toolbar.syncColors();
+  }
+
   private tick(): void {
     const { width, height } = this.app.screen;
     const camera = this.camera.getSnapshot();
-
     this.grid.draw(camera, width, height);
     this.renderer.redraw(camera, width, height);
-    this.brushTool.refreshPreview(camera);
-
+    this.tools.refreshPreview(camera);
     this.zoomHud.textContent = formatZoom(this.camera.logZoom);
   }
 
   private setupInput(canvas: HTMLCanvasElement): void {
     canvas.addEventListener('pointerdown', (e) => this.handlePointerDown(e, canvas));
     canvas.addEventListener('pointermove', (e) => this.handlePointerMove(e, canvas));
-    canvas.addEventListener('pointerup', (e) => this.handlePointerUp(e));
-    canvas.addEventListener('pointercancel', () => {
-      this.isPanning = false;
-      this.brushTool.cancel();
-    });
+    canvas.addEventListener('pointerup', (e) => this.handlePointerUp(e, canvas));
+    canvas.addEventListener('pointercancel', () => this.handleCancel());
     canvas.addEventListener('wheel', (e) => this.handleWheel(e, canvas), { passive: false });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     window.addEventListener('keydown', (e) => this.handleKeyDown(e));
   }
 
+  // right button pans; any other button drives the active tool
   private handlePointerDown(e: PointerEvent, canvas: HTMLCanvasElement): void {
     if (e.button === 2) {
       this.isPanning = true;
@@ -90,10 +138,8 @@ export class PixiApp {
       canvas.style.cursor = 'grabbing';
       return;
     }
-
     canvas.setPointerCapture(e.pointerId);
-    const world = this.toWorld(e, canvas);
-    this.brushTool.onPointerDown(world, e.pressure, this.camera.zoom);
+    this.tools.active.onDown(this.context(e, canvas.getBoundingClientRect()));
   }
 
   private handlePointerMove(e: PointerEvent, canvas: HTMLCanvasElement): void {
@@ -103,22 +149,23 @@ export class PixiApp {
       this.lastPanY = e.clientY;
       return;
     }
-
     const rect = canvas.getBoundingClientRect();
     const events = e.getCoalescedEvents?.() ?? [e];
-    for (const ev of events) {
-      const world = this.camera.toWorld(ev.clientX - rect.left, ev.clientY - rect.top);
-      this.brushTool.onPointerMove(world.x, world.y, ev.pressure);
-    }
+    for (const ev of events) this.tools.active.onMove(this.context(ev, rect));
   }
 
-  private handlePointerUp(e: PointerEvent): void {
+  private handlePointerUp(e: PointerEvent, canvas: HTMLCanvasElement): void {
     if (e.button === 2) {
       this.isPanning = false;
-      (e.target as HTMLCanvasElement).style.cursor = '';
+      canvas.style.cursor = '';
       return;
     }
-    this.brushTool.onPointerUp();
+    this.tools.active.onUp(this.context(e, canvas.getBoundingClientRect()));
+  }
+
+  private handleCancel(): void {
+    this.isPanning = false;
+    this.tools.active.cancel();
   }
 
   private handleWheel(e: WheelEvent, canvas: HTMLCanvasElement): void {
@@ -129,17 +176,27 @@ export class PixiApp {
   }
 
   private handleKeyDown(e: KeyboardEvent): void {
-    if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
-      applyRendererInstruction(this.state.undo(), this.renderer);
-    }
-    if (e.ctrlKey && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
-      applyRendererInstruction(this.state.redo(), this.renderer);
+    const key = e.key.toLowerCase();
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && key === 'z' && !e.shiftKey) return this.run(this.state.undo());
+    if (mod && (key === 'y' || (key === 'z' && e.shiftKey))) return this.run(this.state.redo());
+    if (isTypingTarget(e.target)) return;
+    if (key === 'x') return this.toolbar.swap();
+    const tool = SHORTCUTS[key];
+    if (tool) this.toolbar.selectTool(tool);
+  }
+
+  private run(instructions: RendererInstruction[]): void {
+    for (const instruction of instructions) {
+      if (instruction.action === 'add') this.renderer.addStroke(instruction.stroke);
+      else if (instruction.action === 'remove') this.renderer.removeStroke(instruction.strokeId);
+      else this.renderer.recolorStroke(instruction.strokeId, instruction.color);
     }
   }
 
-  private toWorld(e: PointerEvent, canvas: HTMLCanvasElement): { x: number; y: number } {
-    const rect = canvas.getBoundingClientRect();
-    return this.camera.toWorld(e.clientX - rect.left, e.clientY - rect.top);
+  private context(e: PointerEvent, rect: DOMRect): ToolContext {
+    const world = this.camera.toWorld(e.clientX - rect.left, e.clientY - rect.top);
+    return { world, pressure: e.pressure, zoom: this.camera.zoom };
   }
 }
 
@@ -148,20 +205,23 @@ function formatZoom(logZoom: number): string {
   if (Math.abs(log10) < 3) {
     const zoom = Math.exp(logZoom);
     if (zoom >= 100) return `${Math.round(zoom)}×`;
-    if (zoom >= 1)   return `${zoom.toFixed(1)}×`;
+    if (zoom >= 1) return `${zoom.toFixed(1)}×`;
     return `${zoom.toFixed(3)}×`;
   }
   return `10^${Math.round(log10)}`;
 }
 
-function applyRendererInstruction(
-  instruction: ReturnType<CanvasState['undo']>,
-  renderer: StrokeRenderer,
-): void {
-  if (!instruction) return;
-  if (instruction.action === 'add') {
-    renderer.addStroke(instruction.stroke);
-  } else {
-    renderer.removeStroke(instruction.strokeId);
+function isTypingTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+}
+
+// past ~×8e9 the world size underflows and points collapse below float64 resolution
+const MIN_WORLD_SIZE = 1e-9;
+
+function isDrawable(stroke: BrushStroke): boolean {
+  if (!(stroke.size >= MIN_WORLD_SIZE) || stroke.points.length < 2) return false;
+  for (const p of stroke.points) {
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return false;
   }
+  return true;
 }

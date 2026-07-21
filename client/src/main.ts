@@ -1,3 +1,4 @@
+import './ui/toolbar.css';
 import { PixiApp } from './app/PixiApp';
 
 const container = document.getElementById('app');

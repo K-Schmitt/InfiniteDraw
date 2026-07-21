@@ -1,0 +1,125 @@
+#toolbar {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  width: 76px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  backdrop-filter: blur(8px);
+  user-select: none;
+  font: 13px/1 'SF Mono', 'Consolas', monospace;
+}
+
+#toolbar .group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+#toolbar .shape-row {
+  padding-top: 8px;
+  border-top: 1px dashed rgba(0, 0, 0, 0.12);
+}
+
+#toolbar .icon-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.04);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+#toolbar .icon-btn:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+#toolbar .icon-btn.active {
+  background: #2b7cff;
+  border-color: #1c5fd0;
+  filter: saturate(1.1);
+}
+
+#toolbar .size-slider {
+  width: 100%;
+  accent-color: #2b7cff;
+  cursor: pointer;
+}
+
+#toolbar .size-label {
+  min-width: 18px;
+  text-align: right;
+  color: #555;
+}
+
+#toolbar .swatch-pair {
+  position: relative;
+  width: 40px;
+  height: 40px;
+}
+
+#toolbar .swatch {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border: 2px solid #fff;
+  border-radius: 6px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  padding: 0;
+}
+
+#toolbar .swatch.primary {
+  top: 0;
+  left: 0;
+  z-index: 2;
+}
+
+#toolbar .swatch.secondary {
+  bottom: 0;
+  right: 0;
+  z-index: 1;
+}
+
+#toolbar .hidden-input {
+  width: 0;
+  height: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+#toolbar .palette {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(0, 0, 0, 0.12);
+}
+
+#toolbar .palette-swatch {
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 5px;
+  cursor: pointer;
+  padding: 0;
+}
+
+#toolbar .palette-swatch:hover {
+  transform: scale(1.08);
+}

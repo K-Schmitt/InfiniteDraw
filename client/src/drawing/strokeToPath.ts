@@ -1,6 +1,8 @@
 import { getStroke } from 'perfect-freehand';
 import polygonClipping from 'polygon-clipping';
-import type { BrushStroke } from '@shared/stroke';
+import type { BrushStroke, Point } from '@shared/stroke';
+import { StrokeType } from '@shared/stroke';
+import { strokeOutlineRings } from './outlineStroke';
 
 const STROKE_OPTIONS = {
   thinning: 0.5,
@@ -9,18 +11,52 @@ const STROKE_OPTIONS = {
   simulatePressure: false,
 } as const;
 
+/**
+ * perfect-freehand uses absolute thresholds internally: it discards input points
+ * within 3 units of the stroke end and clamps the per-point radius to ≥0.01.
+ * Our world-space size is config.size / zoom, so past ~×10 it falls below those
+ * walls and the outline gets truncated and garbled. We run perfect-freehand in a
+ * normalized frame where the size is always NORMALIZED_SIZE, then scale the result
+ * back to world space — the geometry comes out identical at every zoom level.
+ */
+const NORMALIZED_SIZE = 64;
+
+type FreehandPoint = [number, number, number];
+
 export function strokeToOutline(stroke: BrushStroke): number[] {
-  if (stroke.points.length < 2) return [];
+  if (stroke.points.length < 2 || !(stroke.size > 0)) return [];
 
-  const input = stroke.points.map(
-    (p, i) => [p.x, p.y, stroke.pressures[i] ?? 0.5] as [number, number, number],
-  );
-
-  return getStroke(input, { ...STROKE_OPTIONS, size: stroke.size }).flat();
+  const scale = NORMALIZED_SIZE / stroke.size;
+  const origin = stroke.points[0]!;
+  const input = toFreehandInput(stroke, origin, scale);
+  const raw = getStroke(input, { ...STROKE_OPTIONS, size: NORMALIZED_SIZE }).flat();
+  return denormalizeOutline(raw, origin, scale);
 }
 
-// polygon union resolves perfect-freehand's self-intersecting outline into outer ring + holes for closed shapes
+// world points → normalized frame (origin-relative, scaled so size ≈ NORMALIZED_SIZE)
+function toFreehandInput(stroke: BrushStroke, origin: Point, scale: number): FreehandPoint[] {
+  return stroke.points.map((p, i) => [
+    (p.x - origin.x) * scale,
+    (p.y - origin.y) * scale,
+    stroke.pressures[i] ?? 0.5,
+  ]);
+}
+
+// normalized outline → world space (inverse of toFreehandInput)
+function denormalizeOutline(outline: readonly number[], origin: Point, scale: number): number[] {
+  const out = new Array<number>(outline.length);
+  for (let i = 0; i < outline.length; i += 2) {
+    out[i]     = outline[i]!     / scale + origin.x;
+    out[i + 1] = outline[i + 1]! / scale + origin.y;
+  }
+  return out;
+}
+
+// filled → raw polygon; brush → organic perfect-freehand outline; line/shapes → exact geometric stroker
 export function strokeToRings(stroke: BrushStroke): number[][] {
+  if (stroke.filled) return filledPolygonRings(stroke);
+  if (stroke.type !== StrokeType.BRUSH) return geometricRings(stroke);
+
   const outline = strokeToOutline(stroke);
   if (outline.length < 6) return [];
 
@@ -44,6 +80,32 @@ export function strokeToRings(stroke: BrushStroke): number[][] {
     }
   }
   return rings.length > 0 ? rings : [outline];
+}
+
+// lines stay open; rect/ellipse/triangle close the loop (first point repeated by the generators)
+function geometricRings(stroke: BrushStroke): number[][] {
+  const pts = stroke.points;
+  if (pts.length < 2) return [];
+  const first = pts[0]!;
+  const last = pts[pts.length - 1]!;
+  const closed = pts.length >= 4 && first.x === last.x && first.y === last.y;
+  return strokeOutlineRings(pts, stroke.size, closed);
+}
+
+// outer ring from points + optional inner holes (e.g. erased-out regions)
+function filledPolygonRings(stroke: BrushStroke): number[][] {
+  if (stroke.points.length < 3) return [];
+  const rings = [flattenPoints(stroke.points)];
+  for (const hole of stroke.holes ?? []) {
+    if (hole.length >= 3) rings.push(flattenPoints(hole));
+  }
+  return rings;
+}
+
+function flattenPoints(points: readonly { x: number; y: number }[]): number[] {
+  const ring: number[] = [];
+  for (const p of points) ring.push(p.x, p.y);
+  return ring;
 }
 
 // local frame keeps coords near zero — float32-safe and precise at extreme zoom
