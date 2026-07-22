@@ -7,6 +7,7 @@ import { strokeToRings } from './strokeToPath';
 import { fillRings, type FillOptions } from './fillRings';
 import { pointInRings } from './hitTest';
 import { enclosedRegionAt, ringsAdjacent } from './fillRegion';
+import { selectFillWalls, sameColor } from './fillWalls';
 import { clipRingsToScreen } from './clipToView';
 import { StrokeStore, type StrokeItem } from './StrokeStore';
 import { TileLayer } from './lod/TileLayer';
@@ -25,9 +26,6 @@ export type FillTargetResult =
   | { kind: 'fill'; rings: number[][]; background: boolean }
   | { kind: 'recolor'; ids: string[] };
 
-function sameColor(a: Color, b: Color): boolean {
-  return a.r === b.r && a.g === b.g && a.b === b.b && a.a === b.a;
-}
 
 function bboxOverlap(a: BoundingBox, b: BoundingBox): boolean {
   return a.maxX >= b.minX && a.minX <= b.maxX && a.maxY >= b.minY && a.minY <= b.maxY;
@@ -119,10 +117,7 @@ export class StrokeRenderer {
     const target = this.topmostAt(world);
     if (target) return { kind: 'recolor', ids: this.sameColorGroup(target) };
 
-    const walls: number[][][] = [];
-    for (const item of this.store.all()) {
-      if (!sameColor(item.stroke.color, color)) walls.push(item.rings);
-    }
+    const walls = selectFillWalls([...this.store.all()], color);
     const cell = enclosedRegionAt(world, walls);
     return cell ? { kind: 'fill', rings: cell, background: true } : null;
   }
