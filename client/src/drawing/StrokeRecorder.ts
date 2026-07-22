@@ -1,5 +1,6 @@
 import type { BrushStroke, Color } from '@shared/stroke';
 import { StrokeType } from '@shared/stroke';
+import { originAnchor, originBbox } from '@shared/anchor';
 
 interface BeginOptions {
   id: string;
@@ -28,6 +29,11 @@ export class StrokeRecorder {
       pressures: [clampPressure(options.pressure)],
       layerId: options.layerId,
       createdAt: Date.now(),
+      // Placeholder anchor: the in-progress stroke lives in the live camera frame; the real
+      // hierarchical anchor is assigned at commit time via commitAnchor (Phase F).
+      anchor: originAnchor(),
+      zIndex: 0,
+      cellBbox: originBbox(),
     };
   }
 

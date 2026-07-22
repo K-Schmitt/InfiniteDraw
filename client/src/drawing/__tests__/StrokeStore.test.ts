@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { BrushStroke } from '@shared/stroke';
 import { StrokeType } from '@shared/stroke';
+import { originAnchor, originBbox } from '@shared/anchor';
 import { StrokeStore } from '../StrokeStore';
 
 function makeStroke(id: string, points: Array<[number, number]>, size = 4): BrushStroke {
@@ -13,6 +14,9 @@ function makeStroke(id: string, points: Array<[number, number]>, size = 4): Brus
     pressures: points.map(() => 0.5),
     layerId: 'default',
     createdAt: 0,
+    anchor: originAnchor(),
+    zIndex: 0,
+    cellBbox: originBbox(),
   };
 }
 

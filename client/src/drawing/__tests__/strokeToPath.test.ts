@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { BrushStroke } from '@shared/stroke';
 import { StrokeType } from '@shared/stroke';
+import { originAnchor, originBbox } from '@shared/anchor';
 import { strokeToOutline, strokeToRings, projectToScreen } from '../strokeToPath';
 
 const BASE_SIZE = 8;
@@ -22,6 +23,9 @@ function strokeAtZoom(zoom: number, camera: { x: number; y: number }): BrushStro
     pressures: SCREEN_GESTURE.map(() => 0.5),
     layerId: 'default',
     createdAt: 0,
+    anchor: originAnchor(),
+    zIndex: 0,
+    cellBbox: originBbox(),
   };
 }
 
@@ -78,6 +82,9 @@ describe('strokeToRings for filled strokes', () => {
       pressures: square.map(() => 1),
       layerId: 'default',
       createdAt: 0,
+      anchor: originAnchor(),
+      zIndex: 0,
+      cellBbox: originBbox(),
       filled: true,
     };
     expect(strokeToRings(filled)).toEqual([[0, 0, 10, 0, 10, 10, 0, 10]]);

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { CanvasState } from '../CanvasState';
 import type { BrushStroke } from '@shared/stroke';
 import { StrokeType } from '@shared/stroke';
+import { originAnchor, originBbox } from '@shared/anchor';
 
 function makeStroke(id: string): BrushStroke {
   return {
@@ -13,6 +14,9 @@ function makeStroke(id: string): BrushStroke {
     pressures: [0.5, 0.8],
     layerId: 'default',
     createdAt: Date.now(),
+    anchor: originAnchor(),
+    zIndex: 0,
+    cellBbox: originBbox(),
   };
 }
 
