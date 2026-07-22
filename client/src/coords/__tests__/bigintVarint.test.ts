@@ -12,7 +12,12 @@ describe('bigintVarint', () => {
   });
 
   it('rejects an over-long varint (anti-DoS)', () => {
-    const evil = Buffer.from(new Array(20).fill(0x80)); // MSB=1 repeated, never terminates
+    const evil = new Uint8Array(20).fill(0x80); // MSB=1 repeated, never terminates
     expect(() => readVarBigInt(evil, 0)).toThrow('varint too long');
+  });
+
+  it('rejects a truncated varint (no OOB read)', () => {
+    const truncated = new Uint8Array([0x80, 0x80]); // MSB=1 then buffer ends
+    expect(() => readVarBigInt(truncated, 0)).toThrow('varint truncated');
   });
 });
