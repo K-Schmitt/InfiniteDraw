@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { GlobalRoom } from '../GlobalRoom.js';
 import { StrokeType, type BrushStroke } from '@shared/stroke.js';
+import { originAnchor, originBbox } from '@shared/anchor.js';
 
 function fakeJournal() {
   return {
@@ -23,6 +24,9 @@ function brush(id: string): BrushStroke {
     pressures: [1, 1],
     layerId: 'default',
     createdAt: 1,
+    anchor: originAnchor(),
+    zIndex: 0,
+    cellBbox: originBbox(),
   };
 }
 

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { StrokeJournal } from '../StrokeJournal.js';
 import { StrokeType, type BrushStroke } from '@shared/stroke.js';
+import { originAnchor, originBbox } from '@shared/anchor.js';
 
 function brush(id: string): BrushStroke {
   return {
@@ -18,6 +19,9 @@ function brush(id: string): BrushStroke {
     pressures: [1, 1],
     layerId: 'default',
     createdAt: 1,
+    anchor: originAnchor(),
+    zIndex: 0,
+    cellBbox: originBbox(),
   };
 }
 
