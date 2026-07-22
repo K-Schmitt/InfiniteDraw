@@ -30,6 +30,13 @@ export function projectToFrame(
 
 // stroke coarser-or-equal: bring its integer cell UP to camera level, scale local up.
 function coarser(a: CellAnchor, lx: number, ly: number, cam: ProjCamera, up: number): ProjResult {
+  // Same constant as `finer`, same root cause (float64's 53-bit mantissa), seen from the other
+  // side — NOT a copy-paste. In `finer`, past MAX_EXACT_GAP the fine point's contribution is
+  // sub-ULP and underflows to 0 (negligible). Here it's the mirror: scaling a local by 2^up
+  // past 53 bits saturates resolution — two distinct float64 locals become indistinguishable in
+  // screen space, so the odds a stored point lands in the visible window are nil. Culling is
+  // therefore correct, not merely "less bad than Infinity" (which is what 2^up eventually hits).
+  if (up > MAX_EXACT_GAP) return CULLED;
   const g = BigInt(up);
   const dIntX = ((a.cell.x * LOCAL_SPAN_N) << g) - cam.cell.x * LOCAL_SPAN_N;
   const dIntY = ((a.cell.y * LOCAL_SPAN_N) << g) - cam.cell.y * LOCAL_SPAN_N;

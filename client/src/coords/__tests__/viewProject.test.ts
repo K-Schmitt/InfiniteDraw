@@ -35,6 +35,16 @@ describe('projectToFrame', () => {
     expect(projectToFrame(anchor(5, far, 0n), 0, 0, cam(5, 0n, 0n))).toBe(CULLED);
   });
 
+  it('culls a coarse stroke past MAX_EXACT_GAP instead of emitting a huge/Infinity float', () => {
+    // anchor 600 levels coarser than the camera, same cell, nonzero local: without the guard
+    // this returned fx ≈ 4e182 (and Infinity past ~1020). Must now be a clean cull.
+    expect(projectToFrame(anchor(0, 0n, 0n), 100, 0, cam(600, 0n, 0n))).toBe(CULLED);
+    // boundary: exactly MAX_EXACT_GAP (53) still projects to a finite float
+    const edge = projectToFrame(anchor(0, 0n, 0n), 100, 0, cam(53, 0n, 0n));
+    expect(edge).not.toBe(CULLED);
+    expect(Number.isFinite((edge as { fx: number }).fx)).toBe(true);
+  });
+
   it('draw @ level 200 seen from level 0 culls without NaN', () => {
     const r = projectToFrame(anchor(200, 3n, 3n), 100, 100, cam(0, 0n, 0n));
     if (r !== CULLED) {
