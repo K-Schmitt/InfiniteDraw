@@ -20,6 +20,7 @@ type Pair = [number, number];
  */
 export class EraserTool implements Tool {
   readonly preview = new Graphics();
+  readonly tentativeStrokeId = null;
   private last: Point | null = null;
   private cursor: Point | null = null;
   private camera: ProjCamera | null = null;

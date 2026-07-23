@@ -63,6 +63,27 @@ export class CanvasState {
     this.recolorMany([id], color);
   }
 
+  // ---- remote operations (no history recording) -------------------------------
+
+  addRemoteStroke(stroke: BrushStroke): void {
+    this._strokes.push(stroke);
+    this.nextZ = Math.max(this.nextZ, stroke.zIndex + 1);
+  }
+
+  removeRemoteStroke(id: string): void {
+    const idx = this._strokes.findIndex((s) => s.id === id);
+    if (idx !== -1) this._strokes.splice(idx, 1);
+  }
+
+  loadSnapshot(strokes: readonly BrushStroke[]): void {
+    this._strokes.length = 0;
+    this.history.length = 0;
+    this.historyIndex = -1;
+    this.eraseTxn = null;
+    this._strokes.push(...strokes);
+    this.nextZ = strokes.reduce((max, s) => Math.max(max, s.zIndex), 0) + 1;
+  }
+
   /** Recolors several strokes to the same color as one undoable step (paint-bucket). */
   recolorMany(ids: readonly string[], color: Color): void {
     const items: { id: string; before: Color }[] = [];

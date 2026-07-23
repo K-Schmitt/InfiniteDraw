@@ -11,6 +11,7 @@ import type { Tool, ToolContext, ToolSettings, CanvasApi } from './Tool';
 /** Rectangle / ellipse / triangle dragged from one corner to the opposite. Outlined (use Fill to fill). */
 export class ShapeTool implements Tool {
   readonly preview = new Graphics();
+  readonly tentativeStrokeId = null;
   private start: Point | null = null;
   private current: Point | null = null;
   private camera: ProjCamera | null = null;

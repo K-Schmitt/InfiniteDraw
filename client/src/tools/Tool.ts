@@ -58,6 +58,8 @@ export interface CanvasApi {
  */
 export interface Tool {
   readonly preview: Container;
+  /** Non-null while a stroke is being recorded live (BrushTool). Null for instant-commit tools. */
+  readonly tentativeStrokeId: string | null;
   onDown(ctx: ToolContext): void;
   onMove(ctx: ToolContext): void;
   onUp(ctx: ToolContext): void;

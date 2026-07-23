@@ -9,5 +9,5 @@
       "@shared/*": ["../shared/types/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src", "../shared/types"]
 }

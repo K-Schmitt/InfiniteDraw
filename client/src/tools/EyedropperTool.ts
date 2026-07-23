@@ -7,6 +7,7 @@ export type ColorSink = (color: Color) => void;
 /** Eyedropper: picks the color of the topmost stroke under the cursor into the primary slot. */
 export class EyedropperTool implements Tool {
   readonly preview = new Container(); // instant action — nothing to preview
+  readonly tentativeStrokeId = null;
 
   constructor(
     _settings: ToolSettings,

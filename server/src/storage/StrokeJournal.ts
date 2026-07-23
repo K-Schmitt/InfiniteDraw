@@ -1,7 +1,8 @@
-import { readFile, appendFile, writeFile, access } from 'node:fs/promises';
+import { mkdir, readFile, appendFile, writeFile, access } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { writePascalString, readPascalString } from './pascalString.js';
 import { encodeStroke, decodeStroke } from './strokeCodec.js';
-import { FILE_MAGIC, FILE_FORMAT_VERSION } from '@shared/project.js';
+import { FILE_MAGIC, FILE_FORMAT_VERSION } from '../../../shared/types/project.js';
 import type { BrushStroke } from '@shared/stroke.js';
 
 /**
@@ -20,8 +21,12 @@ export class StrokeJournal {
 
   static async open(path: string): Promise<StrokeJournal> {
     const journal = new StrokeJournal(path);
-    if (await exists(path)) await journal.replay();
-    else await writeFile(path, header());
+    if (await exists(path)) {
+      await journal.replay();
+    } else {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, header());
+    }
     return journal;
   }
 

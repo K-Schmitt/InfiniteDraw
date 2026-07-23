@@ -7,6 +7,9 @@ import { CanvasState, type RendererInstruction } from '../state/CanvasState';
 import { ToolManager, type ToolId } from '../tools/ToolManager';
 import type { ToolSettings, ToolContext, CanvasApi } from '../tools/Tool';
 import { Toolbar } from '../ui/Toolbar';
+import type { StrokeBeginPayload } from '@shared/socket-events';
+import { CollabClient, type CollabDelegate } from '../network/CollabClient';
+import type { ProjCamera } from '../coords/viewProject';
 
 const ZOOM_FACTOR = 1.12;
 
@@ -37,6 +40,7 @@ export class PixiApp {
   private renderer!: StrokeRenderer;
   private tools!: ToolManager;
   private toolbar!: Toolbar;
+  private collabClient!: CollabClient;
   private zoomHud!: HTMLElement;
   private readonly settings = defaultSettings();
 
@@ -72,6 +76,27 @@ export class PixiApp {
     this.toolbar = new Toolbar(this.settings, this.tools);
     document.body.appendChild(this.toolbar.root);
 
+    const delegate: CollabDelegate = {
+      loadSnapshot: (strokes) => {
+        // Reset local state and renderer to match the room snapshot.
+        // Simplest approach: remove all rendered strokes, then re-add.
+        const current = [...this.state.strokes];
+        for (const s of current) this.renderer.removeStroke(s.id);
+        this.state.loadSnapshot(strokes);
+        for (const s of strokes) this.renderer.addStroke(s);
+      },
+      remoteStrokeAdded: (stroke) => {
+        this.state.addRemoteStroke(stroke);
+        this.renderer.addStroke(stroke);
+      },
+      remoteStrokeDeleted: (id) => {
+        this.state.removeRemoteStroke(id);
+        this.renderer.removeStroke(id);
+      },
+    };
+    this.collabClient = new CollabClient('http://localhost:3000', delegate);
+    this.app.stage.addChild(this.collabClient.remoteLayer);
+
     this.setupInput(this.app.canvas as HTMLCanvasElement);
     this.app.ticker.add(() => this.tick());
   }
@@ -97,12 +122,19 @@ export class PixiApp {
     if (!isDrawable(stroke)) return; // reject degenerate strokes made past float64-safe zoom
     this.state.addStroke(stroke);
     this.renderer.addStroke(stroke);
+    this.collabClient.sendStrokeCommit(stroke);
   }
 
   private eraseLive(removeIds: readonly string[], additions: readonly BrushStroke[]): void {
     this.state.liveErase(removeIds, additions);
-    for (const id of removeIds) this.renderer.removeStroke(id);
-    for (const stroke of additions) this.renderer.addStroke(stroke);
+    for (const id of removeIds) {
+      this.renderer.removeStroke(id);
+      this.collabClient.sendStrokeDelete(id);
+    }
+    for (const stroke of additions) {
+      this.renderer.addStroke(stroke);
+      this.collabClient.sendStrokeCommit(stroke);
+    }
   }
 
   private applyPick(color: Color): void {
@@ -139,6 +171,15 @@ export class PixiApp {
     }
     canvas.setPointerCapture(e.pointerId);
     this.tools.active.onDown(this.context(e, canvas.getBoundingClientRect()));
+    const tentativeId = this.tools.active.tentativeStrokeId;
+    if (tentativeId) {
+      this.collabClient.sendStrokeBegin({
+        tentativeId,
+        color: this.settings.primary,
+        size: this.settings.size,
+        camera: serializableCamera(this.camera.projCamera),
+      });
+    }
   }
 
   private handlePointerMove(e: PointerEvent, canvas: HTMLCanvasElement): void {
@@ -150,7 +191,14 @@ export class PixiApp {
     }
     const rect = canvas.getBoundingClientRect();
     const events = e.getCoalescedEvents?.() ?? [e];
-    for (const ev of events) this.tools.active.onMove(this.context(ev, rect));
+    const tool = this.tools.active;
+    for (const ev of events) tool.onMove(this.context(ev, rect));
+    const frame = this.camera.screenToFrame(e.clientX - rect.left, e.clientY - rect.top);
+    const tentativeId = tool.tentativeStrokeId;
+    if (tentativeId) {
+      this.collabClient.sendStrokePoint({ tentativeId, point: frame });
+    }
+    this.collabClient.broadcastCursor(frame.x, frame.y);
   }
 
   private handlePointerUp(e: PointerEvent, canvas: HTMLCanvasElement): void {
@@ -159,6 +207,10 @@ export class PixiApp {
       canvas.style.cursor = '';
       return;
     }
+    // Read tentativeStrokeId BEFORE onUp() — BrushTool.onUp nulls current stroke.
+    // BrushTool.onUp() calls commit() which emits stroke:commit.
+    // Instant-commit tools (tentativeId is null) commit inside own onUp() —
+    // they never sent stroke:begin, so no separate emit needed.
     this.tools.active.onUp(this.context(e, canvas.getBoundingClientRect()));
   }
 
@@ -203,6 +255,16 @@ export class PixiApp {
       pressure: e.pressure,
     };
   }
+}
+
+function serializableCamera(c: ProjCamera): StrokeBeginPayload['camera'] {
+  return {
+    level: c.level,
+    cellX: c.cell.x.toString(),
+    cellY: c.cell.y.toString(),
+    subX: c.sub.x,
+    subY: c.sub.y,
+  };
 }
 
 function formatZoom(logZoom: number): string {

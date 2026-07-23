@@ -8,6 +8,7 @@ import type { Tool, ToolContext, ToolSettings, CanvasApi } from './Tool';
 /** Paint-bucket: fills the empty region enclosed by surrounding strokes under the click. */
 export class FillTool implements Tool {
   readonly preview = new Container(); // instant action — nothing to preview
+  readonly tentativeStrokeId = null;
 
   constructor(
     private readonly settings: ToolSettings,

@@ -10,6 +10,7 @@ import type { Tool, ToolContext, ToolSettings, CanvasApi } from './Tool';
 /** Straight line from press to release. Two-point stroke, constant on-screen thickness. */
 export class LineTool implements Tool {
   readonly preview = new Graphics();
+  readonly tentativeStrokeId = null;
   private start: Point | null = null;
   private end: Point | null = null;
   private camera: ProjCamera | null = null;

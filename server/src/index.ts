@@ -1,10 +1,6 @@
-/**
- * Entry point — Step 1 stub.
- * Full Socket.io server + room management implemented in Step 4.
- */
-
 import express from 'express';
 import { createServer } from 'node:http';
+import { CollabServer } from './CollabServer.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -24,6 +20,8 @@ httpServer.on('error', (err: NodeJS.ErrnoException) => {
   }
   throw err;
 });
+
+new CollabServer(httpServer);
 
 httpServer.listen(PORT, () => {
   console.log(`InfiniteDraw server listening on :${PORT}`);

@@ -37,6 +37,7 @@ client/coverage/
 # Save files (project data)
 *.lorien
 saves/
+server/data/*.bin
 
 # Vite cache
 client/.vite/

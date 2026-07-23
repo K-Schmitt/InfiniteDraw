@@ -1,5 +1,5 @@
 import { writePascalString, readPascalString } from './pascalString.js';
-import { writeVarBigInt, readVarBigInt } from '@shared/bigintVarint.js';
+import { writeVarBigInt, readVarBigInt } from '../../../shared/types/bigintVarint.js';
 import type { BrushStroke, Point, StrokeType } from '@shared/stroke.js';
 
 /**

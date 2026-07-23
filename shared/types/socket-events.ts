@@ -27,6 +27,36 @@ export interface CursorPosition {
   y: number;
 }
 
+/**
+ * Camera parameters serialized for the network.
+ * BigInt cell coordinates become strings; sub is float in [0, LOCAL_SPAN).
+ */
+export interface SerializableCamera {
+  level: number;
+  cellX: string;
+  cellY: string;
+  subX: number;
+  subY: number;
+}
+
+/** Sent on pointer down — enough info for receivers to show a ghost preview. */
+export interface StrokeBeginPayload {
+  /** Server-injected; sender's connected user id. Set by server on relay. */
+  userId?: string;
+  tentativeId: string;
+  color: Color;
+  size: number;
+  camera: SerializableCamera;
+}
+
+/** Sent on each pointer move during a live stroke. */
+export interface StrokePointPayload {
+  /** Server-injected; sender's connected user id. Set by server on relay. */
+  userId?: string;
+  tentativeId: string;
+  point: Point;
+}
+
 // ---------------------------------------------------------------------------
 // Server → Client events
 // ---------------------------------------------------------------------------
@@ -40,6 +70,12 @@ export interface ServerToClientEvents {
 
   /** Live preview of a stroke in progress (partial points). */
   'stroke:preview': (preview: StrokePreview) => void;
+
+  /** Another user began a stroke — show ghost cursor + preview anchor. */
+  'stroke:begin': (payload: StrokeBeginPayload) => void;
+
+  /** A point was added to a live stroke in progress. */
+  'stroke:point': (payload: StrokePointPayload) => void;
 
   /** Another user deleted a stroke by id. */
   'stroke:deleted': (strokeId: string) => void;
@@ -70,6 +106,12 @@ export interface ClientToServerEvents {
 
   /** Join an existing room by id. */
   'room:join': (roomId: string, callback: (error?: string) => void) => void;
+
+  /** Emitted on pointer down — receivers show ghost cursor + preview anchor. */
+  'stroke:begin': (payload: StrokeBeginPayload) => void;
+
+  /** Emitted on each pointer move during a live stroke. */
+  'stroke:point': (payload: StrokePointPayload) => void;
 
   /** Commit a completed stroke to the room. */
   'stroke:commit': (stroke: BrushStroke) => void;

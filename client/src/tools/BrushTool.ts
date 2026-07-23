@@ -18,6 +18,10 @@ export class BrushTool implements Tool {
   private previewPointCount = 0;
   private lastResolveAt = 0;
 
+  get tentativeStrokeId(): string | null {
+    return this.recorder.getPreviewStroke()?.id ?? null;
+  }
+
   constructor(
     private readonly settings: ToolSettings,
     private readonly api: CanvasApi,
