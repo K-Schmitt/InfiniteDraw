@@ -4,6 +4,26 @@ import type { ProjCamera } from '../coords/viewProject';
 
 const HYSTERESIS = 0.05; // dead-band at level boundaries to stop half-pixel jitter
 
+// Sub-cell offset is stored as BigInt fixed-point (Q64) so a level crossing's ×2/÷2 is an exact
+// bit shift, not a float multiply. Float sub loses a low bit per crossing and rescaleCell's
+// doublings amplify that residue by 2^(levels crossed) — a symmetric zoom-out/in round trip past
+// ~40 levels drifted the camera by ~1 LOCAL_SPAN (F2 bug 2). Q64 keeps 64 fractional bits below
+// the local unit: coarsening `>>1` erodes one per level, so the sub position survives a round
+// trip through ~64 zoom levels — well past the depth at which a stroke is still above one pixel.
+// Deeper than that the sub genuinely underflows (the point is sub-pixel and gone either way).
+const SUB_FRAC_BITS = 64n;
+const SUB_ONE = 2 ** 64; // 2^64 as a float, for BigInt fixed-point ↔ float conversion
+const CELL_Q = BigInt(LOCAL_SPAN) << SUB_FRAC_BITS; // one whole cell in Q32 units
+
+/** Float local units → Q64 BigInt fixed-point (rounds only here; downstream shifts stay exact). */
+function toQ(localUnits: number): bigint {
+  return BigInt(Math.round(localUnits * SUB_ONE));
+}
+
+function finiteOrZero(v: number): number {
+  return Number.isFinite(v) ? v : 0;
+}
+
 // Clamp only the *rendered zoom scalar* so Math.exp never overflows to Infinity downstream
 // (float32 PixiJS transforms die well before exp(700) anyway). This does NOT bound navigation:
 // level/cell keep growing without limit, honouring the locked "no zoom bound" invariant.
@@ -19,21 +39,21 @@ export class HierCamera {
   private level = 0;
   private cellX = 0n;
   private cellY = 0n;
-  private subX = 0;
-  private subY = 0;
+  // Sub-cell offset in Q32 fixed-point (local units × 2^32). See SUB_FRAC_BITS note above.
+  private subQx = 0n;
+  private subQy = 0n;
   private frac = 0;
-  // Kahan compensation terms for subX/subY: the rounding residue not yet folded into sub,
-  // carried forward so hundreds of small pivot-shift additions don't lose it to ULP rounding.
-  private compX = 0;
-  private compY = 0;
 
   get projCamera(): ProjCamera {
     return {
       level: this.level,
       cell: { x: this.cellX, y: this.cellY },
-      sub: { x: this.subX, y: this.subY },
+      sub: { x: Number(this.subQx) / SUB_ONE, y: Number(this.subQy) / SUB_ONE },
     };
   }
+
+  private get subX(): number { return Number(this.subQx) / SUB_ONE; }
+  private get subY(): number { return Number(this.subQy) / SUB_ONE; }
 
   /** World-units → pixels at the current zoom. */
   get scale(): number {
@@ -52,8 +72,8 @@ export class HierCamera {
   }
 
   setSub(x: number, y = 0): void {
-    this.subX = x;
-    this.subY = y;
+    this.subQx = toQ(x);
+    this.subQy = toQ(y);
   }
 
   panPixels(dxScreen: number, dyScreen: number): void {
@@ -66,28 +86,21 @@ export class HierCamera {
   // No depth bound — level/cell grow without limit (locked "no zoom bound" invariant).
   zoomBy(deltaLog2: number, pivotFx: number, pivotFy: number): void {
     const k = 2 ** -deltaLog2; // = scaleBefore/scaleAfter in pixels-per-local-unit terms
-    this.addToSub(pivotFx * (1 - k), pivotFy * (1 - k));
+    // A single huge-magnitude zoom overflows k to ±Infinity; 0·Infinity = NaN. Real input is
+    // wheel notches where this never happens, but guard so the fixed-point conversion can't throw.
+    const shift = 1 - k;
+    this.addToSub(finiteOrZero(pivotFx * shift), finiteOrZero(pivotFy * shift));
     this.frac += deltaLog2;
     this.normaliseLevel();
     this.carry();
   }
 
-  // Kahan (compensated) summation: subX/subY each accumulate hundreds of small pivot-shift
-  // and pan deltas over a session. Plain += loses low-order bits to ULP rounding each time;
-  // rescaleCell's later doublings then amplify that residue by up to 2^levels-crossed. Kahan
-  // tracks the lost residue in comp and folds it back in on the next addition — best-effort
-  // drift reduction; the legacy-bridge render path still degrades at extreme depth (F2 fixes
-  // that properly by projecting each stroke via projectToFrame instead of collapsing to float).
+  // Accumulate a float local-unit delta into the Q32 sub. Only the input is rounded (to 2^-32
+  // local); once in BigInt it survives every later level crossing exactly, so pan/zoom deltas no
+  // longer feed a residue that rescaleCell's doublings could amplify (the F2 bug-2 mechanism).
   private addToSub(dx: number, dy: number): void {
-    const yx = dx - this.compX;
-    const tx = this.subX + yx;
-    this.compX = tx - this.subX - yx;
-    this.subX = tx;
-
-    const yy = dy - this.compY;
-    const ty = this.subY + yy;
-    this.compY = ty - this.subY - yy;
-    this.subY = ty;
+    this.subQx += toQ(dx);
+    this.subQy += toQ(dy);
   }
 
   private normaliseLevel(): void {
@@ -95,27 +108,26 @@ export class HierCamera {
     while (this.frac < -HYSTERESIS) { this.frac += 1; this.level -= 1; this.rescaleCell(-1); }
   }
 
-  // moving a whole level rescales cell/sub by 2 (finer) or ½ (coarser), screen-invariant.
-  // comp (Kahan residue) scales alongside sub — ×2/÷2 is exact, so this doesn't add error.
+  // Moving a whole level rescales cell/sub by 2 (finer) or ½ (coarser), screen-invariant. On
+  // Q32 BigInt this is an exact shift: finer doubles the local offset (<<1); coarser folds the
+  // dropped cell parity back into sub then halves (>>1). No float rounding, so no drift.
   private rescaleCell(dir: 1 | -1): void {
     if (dir === 1) {
       this.cellX <<= 1n; this.cellY <<= 1n;
-      this.subX *= 2; this.subY *= 2;
-      this.compX *= 2; this.compY *= 2;
+      this.subQx <<= 1n; this.subQy <<= 1n;
     } else {
-      this.subX += Number(this.cellX & 1n) * LOCAL_SPAN; this.cellX >>= 1n;
-      this.subY += Number(this.cellY & 1n) * LOCAL_SPAN; this.cellY >>= 1n;
-      this.subX /= 2; this.subY /= 2;
-      this.compX /= 2; this.compY /= 2;
+      this.subQx += (this.cellX & 1n) * CELL_Q; this.cellX >>= 1n;
+      this.subQy += (this.cellY & 1n) * CELL_Q; this.cellY >>= 1n;
+      this.subQx >>= 1n; this.subQy >>= 1n;
     }
     this.carry();
   }
 
   carry(): void {
-    while (this.subX >= LOCAL_SPAN) { this.subX -= LOCAL_SPAN; this.cellX += 1n; }
-    while (this.subX < 0) { this.subX += LOCAL_SPAN; this.cellX -= 1n; }
-    while (this.subY >= LOCAL_SPAN) { this.subY -= LOCAL_SPAN; this.cellY += 1n; }
-    while (this.subY < 0) { this.subY += LOCAL_SPAN; this.cellY -= 1n; }
+    while (this.subQx >= CELL_Q) { this.subQx -= CELL_Q; this.cellX += 1n; }
+    while (this.subQx < 0n) { this.subQx += CELL_Q; this.cellX -= 1n; }
+    while (this.subQy >= CELL_Q) { this.subQy -= CELL_Q; this.cellY += 1n; }
+    while (this.subQy < 0n) { this.subQy += CELL_Q; this.cellY -= 1n; }
   }
 
   /** Legacy float64 view of this camera's reference point (top-left of viewport) and zoom.

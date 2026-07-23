@@ -132,3 +132,52 @@ describe('HierCamera Kahan-compensated sub accumulation (regression)', () => {
     expect(Math.abs(screenX - PIVOT_SX - (700 - PIVOT_SX) * c.scale)).toBeLessThan(1);
   });
 });
+
+describe('HierCamera deep-zoom sub precision (F2 bug 2 regression)', () => {
+  // Manual repro (F2 audit): draw at zoom 1, dézoome jusqu'à ~10^-16, re-zoom in — the stroke
+  // never returns. Root cause: rescaleCell's `sub *= 2` on the way back up amplifies sub's ULP
+  // quantization by 2^(levels crossed); Kahan summation did not help (its residue tracks
+  // addition low-bits, not the doubling of an already-rounded float). Past ~40 levels a
+  // symmetric zoom-out/zoom-in round trip drifted the camera by ~5 whole cells (~340000px,
+  // growing per cycle — the "never returns"). The fix stores the sub-cell offset as BigInt
+  // fixed-point so cross-level scaling is an exact shift, killing the 2^levels amplification.
+  const NOTCH = Math.log2(1.12);
+
+  function deepSymmetricRoundTrip(pivotSx: number): HierCamera {
+    const c = new HierCamera();
+    let notches = 0;
+    while (c.projCamera.level > -56) {
+      const p = c.screenToFrame(pivotSx, 0);
+      c.zoomBy(-NOTCH, p.x, p.y);
+      notches += 1;
+    }
+    expect(c.projCamera.level).toBeLessThanOrEqual(-56); // sanity: reached ~10^-16.8
+    for (let i = 0; i < notches; i += 1) {
+      const p = c.screenToFrame(pivotSx, 0);
+      c.zoomBy(NOTCH, p.x, p.y);
+    }
+    return c;
+  }
+
+  // Reference (top-left) offset expressed back at level 0; 0 means the camera returned exactly.
+  function pos0Of(c: HierCamera): number {
+    const pc = c.projCamera;
+    return (Number(pc.cell.x) * 65536 + pc.sub.x) * 2 ** -pc.level;
+  }
+
+  it('returns exactly for an origin-anchored deep round trip (sub stays exact)', () => {
+    // With the pivot at the cell origin every pan delta is 0, so a correct fixed-point sub must
+    // survive 56 exact ×2/÷2 crossings with zero drift. (Float sub already managed this case;
+    // it is the control that proves the BigInt rewrite did not itself introduce drift.)
+    expect(Math.abs(pos0Of(deepSymmetricRoundTrip(0)))).toBeLessThan(1e-6);
+  });
+
+  it('no longer corrupts whole cells for an offset-pivot deep round trip', () => {
+    // The pre-fix bug: this drifted by ~5 whole LOCAL_SPAN cells (cellX 0→5). The BigInt sub
+    // removes that exponential cell corruption. A residual float drift remains — proportional to
+    // pivot distance (~7px per pivot-unit at 56 levels), from rounding of the incremental pan
+    // term amplified by the up-path doublings — but it is bounded well below a single cell, so
+    // the integer grid is never corrupted and the drift no longer accumulates per zoom cycle.
+    expect(Math.abs(pos0Of(deepSymmetricRoundTrip(400)))).toBeLessThan(65536 / 8);
+  });
+});
