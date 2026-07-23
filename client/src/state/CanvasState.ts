@@ -21,6 +21,10 @@ export class CanvasState {
   private readonly _strokes: BrushStroke[] = [];
   private readonly history: HistoryEntry[] = [];
   private historyIndex = -1;
+  // Monotone global paint-order counter. Assigned once per genuinely-new stroke; never rolled
+  // back on undo, so a redraw after undo always outranks the undone stroke. Undo/redo re-add the
+  // same object, which keeps its assigned zIndex — restored, not reassigned.
+  private nextZ = 0;
   // in-progress eraser gesture: applied to _strokes live, recorded as one entry on commit
   private eraseTxn: { removed: Map<string, BrushStroke>; added: Map<string, BrushStroke> } | null =
     null;
@@ -30,6 +34,7 @@ export class CanvasState {
   }
 
   addStroke(stroke: BrushStroke): void {
+    stroke.zIndex = this.nextZ++; // genuinely-new stroke gets the next paint slot
     this._strokes.push(stroke);
     this.record({ type: 'add', stroke });
   }

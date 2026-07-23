@@ -129,4 +129,44 @@ describe('CanvasState', () => {
     state.redo();
     expect(state.strokes).toHaveLength(2);
   });
+
+  describe('zIndex counter', () => {
+    it('assigns a strictly increasing zIndex to each new stroke', () => {
+      const a = makeStroke('a');
+      const b = makeStroke('b');
+      const c = makeStroke('c');
+      state.addStroke(a);
+      state.addStroke(b);
+      state.addStroke(c);
+      expect(a.zIndex).toBeLessThan(b.zIndex);
+      expect(b.zIndex).toBeLessThan(c.zIndex);
+    });
+
+    it('preserves (does not reassign) a stroke zIndex across undo then redo', () => {
+      const a = makeStroke('a');
+      state.addStroke(a);
+      const original = a.zIndex;
+      state.undo();
+      state.redo();
+      expect(a.zIndex).toBe(original); // restored, not bumped
+    });
+
+    it('keeps the counter monotone: a new draw after undo outranks the undone one', () => {
+      const a = makeStroke('a');
+      const b = makeStroke('b');
+      state.addStroke(a);
+      state.undo();       // a undone, but counter must not roll back
+      state.addStroke(b); // brand new stroke
+      expect(b.zIndex).toBeGreaterThan(a.zIndex);
+    });
+
+    it('does not reassign zIndex on eraser additions (they carry their own)', () => {
+      const a = makeStroke('a');
+      state.addStroke(a);
+      const seg = makeStroke('a1');
+      seg.zIndex = a.zIndex; // eraser sets segment zIndex from the original
+      state.replaceStrokes(['a'], [seg]);
+      expect(seg.zIndex).toBe(a.zIndex); // preserved, not overwritten
+    });
+  });
 });
