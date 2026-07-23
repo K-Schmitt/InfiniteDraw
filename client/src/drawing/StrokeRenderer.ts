@@ -12,10 +12,20 @@ import { ringsToFrame, ringArea, frameBboxOf, cameraInsideStroke, localBoundsOf 
 
 const HIDE_THRESHOLD = 0.02;
 const MAX_SCREEN_STROKE_WIDTH = 2e34;
+// Above this camera-vs-anchor level gap, placing a stroke by scaling anchor-local geometry
+// (gfx.scale ≈ 2^gap, gfx.position ≈ -origin·2^gap) makes the GPU's float32 vertex transform
+// cancel two ~2^(gap+16) terms — ULP grows past whole pixels, so the stroke jitters off-screen
+// (F2 bug 1). Past the threshold we instead re-express each vertex in frame coords (float64,
+// small magnitudes) so the GPU only ever multiplies by ~2^frac. Below it the cheap bake-once
+// transform stays sub-pixel, avoiding a per-frame re-bake of every stroke at normal zoom.
+const FRAME_REBAKE_GAP = 2;
+// Max on-screen span (px) a stroke may cover before its frame geometry outruns float32's 24-bit
+// mantissa (2^22 ≈ 4M px keeps rasterisation sub-pixel). Past it, bleed instead of baking.
+const FRAME_MAX_SCREEN_SPAN = 2 ** 22;
 // background fills sort below every real stroke so outlines stay visible on top (Bug 1 fix)
 const BG_ORDER = 1e9;
 
-type RenderMode = 'baked' | 'bleed';
+type RenderMode = 'baked' | 'bleed' | 'frame';
 
 export type FillTargetResult =
   | { kind: 'fill'; rings: number[][]; background: boolean }
@@ -221,10 +231,35 @@ export class StrokeRenderer {
     if (proj === CULLED) return this.placeCulled(item, p, camera);
     const scale = anchorScaleOf(frameScale, camera.level, item.stroke.anchor.level);
     if (!isPlaceable(item.stroke, scale)) { p.gfx.visible = false; return; }
-    if (p.mode === 'bleed') this.rebake(item, p);
+    if (camera.level - item.stroke.anchor.level > FRAME_REBAKE_GAP) {
+      // Frame geometry stays float32-renderable only while the stroke's on-screen span fits the
+      // 24-bit mantissa. Once you are zoomed so far in that its span exceeds that, its far
+      // vertices overflow and rasterisation breaks — but at that depth the camera sits inside the
+      // stroke, so hand off to the §4 bleed (fill viewport) / hide decision instead of baking it.
+      if (localSpanOf(item.rings) * scale > FRAME_MAX_SCREEN_SPAN) {
+        return this.placeCulled(item, p, camera);
+      }
+      return this.placeInFrame(item, p, camera, frameScale);
+    }
+    if (p.mode !== 'baked') this.rebake(item, p);
     p.gfx.visible = true;
     p.gfx.position.set(proj.fx * frameScale, proj.fy * frameScale);
     p.gfx.scale.set(scale);
+  }
+
+  // Deep-zoom path: bake the stroke's rings already projected into frame coords, so the GPU
+  // transform is only a small ×frameScale — no float32-cancelling huge scale/offset (F2 bug 1).
+  private placeInFrame(
+    item: StrokeItem, p: Placement, camera: ProjCamera, frameScale: number,
+  ): void {
+    const frameRings = ringsToFrame(item.stroke.anchor, item.rings, camera);
+    if (frameRings === null) return this.placeCulled(item, p, camera);
+    p.mode = 'frame';
+    p.gfx.clear();
+    fillRings(p.gfx, frameRings, fillOptions(item.stroke));
+    p.gfx.position.set(0, 0);
+    p.gfx.scale.set(frameScale);
+    p.gfx.visible = true;
   }
 
   // camera outside → hide; camera over a much-coarser stroke's extent → bleed a viewport fill (§4)
@@ -260,6 +295,12 @@ interface GroupCandidate {
 
 function paintOrder(stroke: BrushStroke): number {
   return stroke.background ? stroke.zIndex - BG_ORDER : stroke.zIndex;
+}
+
+/** Larger of a stroke's local bbox dimensions — its on-screen span is this × anchor scale. */
+function localSpanOf(rings: readonly number[][]): number {
+  const b = localBoundsOf(rings);
+  return Math.max(b.maxX - b.minX, b.maxY - b.minY);
 }
 
 // filled regions have area, not a stroke width — cull those by projection only, not by diameter
