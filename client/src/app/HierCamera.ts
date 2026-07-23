@@ -4,8 +4,10 @@ import type { ProjCamera } from '../coords/viewProject';
 
 const HYSTERESIS = 0.05; // dead-band at level boundaries to stop half-pixel jitter
 
-// Matches the old CameraController's render-zoom clamp: exp(700) is still float64-safe but
-// float32 (PixiJS transforms) overflows well before that. logZoom itself stays unbounded.
+// Clamp only the *rendered zoom scalar* so Math.exp never overflows to Infinity downstream
+// (float32 PixiJS transforms die well before exp(700) anyway). This does NOT bound navigation:
+// level/cell keep growing without limit, honouring the locked "no zoom bound" invariant.
+// logZoom (HUD) stays unclamped.
 const RENDER_LOG_LIMIT = 600;
 
 /**
@@ -20,6 +22,10 @@ export class HierCamera {
   private subX = 0;
   private subY = 0;
   private frac = 0;
+  // Kahan compensation terms for subX/subY: the rounding residue not yet folded into sub,
+  // carried forward so hundreds of small pivot-shift additions don't lose it to ULP rounding.
+  private compX = 0;
+  private compY = 0;
 
   get projCamera(): ProjCamera {
     return {
@@ -47,19 +53,36 @@ export class HierCamera {
 
   panPixels(dxScreen: number, dyScreen: number): void {
     const localPerPixel = 2 ** -this.frac;
-    this.subX -= dxScreen * localPerPixel;
-    this.subY -= dyScreen * localPerPixel;
+    this.addToSub(-dxScreen * localPerPixel, -dyScreen * localPerPixel);
     this.carry();
   }
 
   // pivot-preserving zoom: keep the world point under (pivotFx,pivotFy) fixed on screen.
+  // No depth bound — level/cell grow without limit (locked "no zoom bound" invariant).
   zoomBy(deltaLog2: number, pivotFx: number, pivotFy: number): void {
     const k = 2 ** -deltaLog2; // = scaleBefore/scaleAfter in pixels-per-local-unit terms
-    this.subX += pivotFx * (1 - k);
-    this.subY += pivotFy * (1 - k);
+    this.addToSub(pivotFx * (1 - k), pivotFy * (1 - k));
     this.frac += deltaLog2;
     this.normaliseLevel();
     this.carry();
+  }
+
+  // Kahan (compensated) summation: subX/subY each accumulate hundreds of small pivot-shift
+  // and pan deltas over a session. Plain += loses low-order bits to ULP rounding each time;
+  // rescaleCell's later doublings then amplify that residue by up to 2^levels-crossed. Kahan
+  // tracks the lost residue in comp and folds it back in on the next addition — best-effort
+  // drift reduction; the legacy-bridge render path still degrades at extreme depth (F2 fixes
+  // that properly by projecting each stroke via projectToFrame instead of collapsing to float).
+  private addToSub(dx: number, dy: number): void {
+    const yx = dx - this.compX;
+    const tx = this.subX + yx;
+    this.compX = tx - this.subX - yx;
+    this.subX = tx;
+
+    const yy = dy - this.compY;
+    const ty = this.subY + yy;
+    this.compY = ty - this.subY - yy;
+    this.subY = ty;
   }
 
   private normaliseLevel(): void {
@@ -67,15 +90,18 @@ export class HierCamera {
     while (this.frac < -HYSTERESIS) { this.frac += 1; this.level -= 1; this.rescaleCell(-1); }
   }
 
-  // moving a whole level rescales cell/sub by 2 (finer) or ½ (coarser), screen-invariant
+  // moving a whole level rescales cell/sub by 2 (finer) or ½ (coarser), screen-invariant.
+  // comp (Kahan residue) scales alongside sub — ×2/÷2 is exact, so this doesn't add error.
   private rescaleCell(dir: 1 | -1): void {
     if (dir === 1) {
       this.cellX <<= 1n; this.cellY <<= 1n;
       this.subX *= 2; this.subY *= 2;
+      this.compX *= 2; this.compY *= 2;
     } else {
       this.subX += Number(this.cellX & 1n) * LOCAL_SPAN; this.cellX >>= 1n;
       this.subY += Number(this.cellY & 1n) * LOCAL_SPAN; this.cellY >>= 1n;
       this.subX /= 2; this.subY /= 2;
+      this.compX /= 2; this.compY /= 2;
     }
     this.carry();
   }

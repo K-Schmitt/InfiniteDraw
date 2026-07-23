@@ -73,8 +73,20 @@ describe('HierCamera.toLegacyCamera pivot invariance across level crossings', ()
   });
 });
 
+describe('HierCamera infinite zoom (no depth bound)', () => {
+  it('lets level grow without limit in both directions', () => {
+    const cIn = new HierCamera();
+    cIn.zoomBy(2000, 0, 0);
+    expect(cIn.projCamera.level).toBeGreaterThan(1000); // no clamp — navigation is unbounded
+
+    const cOut = new HierCamera();
+    cOut.zoomBy(-2000, 0, 0);
+    expect(cOut.projCamera.level).toBeLessThan(-1000);
+  });
+});
+
 describe('HierCamera.toLegacyCamera render-zoom clamp', () => {
-  it('clamps zoom so extreme levels never produce Infinity/NaN downstream', () => {
+  it('clamps the rendered zoom scalar so extreme levels never produce Infinity/NaN', () => {
     const c = new HierCamera();
     c.zoomBy(2000, 0, 0); // far past RENDER_LOG_LIMIT
     const { zoom } = c.toLegacyCamera();
@@ -86,5 +98,37 @@ describe('HierCamera.toLegacyCamera render-zoom clamp', () => {
     const c = new HierCamera();
     c.zoomBy(2000, 0, 0);
     expect(c.logZoom).toBeGreaterThan(600); // unclamped, unlike toLegacyCamera().zoom
+  });
+});
+
+describe('HierCamera Kahan-compensated sub accumulation (regression)', () => {
+  it('keeps a recorded world point sub-pixel accurate after a round trip through ~36 levels', () => {
+    // Regression test for the precision-amplification bug found via manual testing: hundreds
+    // of small pivot-shift additions in zoomBy each lose a few ULPs to float rounding: harmless
+    // on their own, but rescaleCell's doublings on the way back in amplify that residue by up
+    // to 2^(levels crossed). Before the Kahan fix + depth clamp, a round trip through ~53
+    // levels left the camera position off by roughly one LOCAL_SPAN (tens of thousands of
+    // world units) — reproduced and measured during manual testing of Task F1.
+    const c = new HierCamera();
+    const PIVOT_SX = 800;
+    const before = c.toLegacyCamera();
+    const worldX = 700 / before.zoom + before.x;
+
+    const NOTCH = Math.log2(1.12);
+    const notches = Math.round(36 / NOTCH);
+    for (let i = 0; i < notches; i++) {
+      const p = c.screenToFrame(PIVOT_SX, 0);
+      c.zoomBy(-NOTCH, p.x, p.y);
+    }
+    expect(c.projCamera.level).toBeLessThan(-30); // sanity: this test must go deep
+    for (let i = 0; i < notches; i++) {
+      const p = c.screenToFrame(PIVOT_SX, 0);
+      c.zoomBy(NOTCH, p.x, p.y);
+    }
+
+    const after = c.toLegacyCamera();
+    const screenX = (worldX - after.x) * after.zoom;
+    // Tolerance: sub-pixel, not the ~60000-unit drift seen pre-fix.
+    expect(Math.abs(screenX - PIVOT_SX - (700 - PIVOT_SX) * c.scale)).toBeLessThan(1);
   });
 });
