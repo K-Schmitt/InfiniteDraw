@@ -4,7 +4,7 @@ import { HierCamera } from '../HierCamera';
 describe('HierCamera carry', () => {
   it('carries sub over the high boundary exactly (positive)', () => {
     const c = new HierCamera();
-    c.setSub(65536 + 40);
+    c.setSub(65536 + 40); // just over one cell
     c.carry();
     expect(c.projCamera.cell.x).toBe(1n);
     expect(c.projCamera.sub.x).toBe(40); // Sterbenz-exact
@@ -22,7 +22,7 @@ describe('HierCamera carry', () => {
 describe('HierCamera zoom hysteresis', () => {
   it('does not thrash levels when oscillating on a boundary', () => {
     const c = new HierCamera();
-    c.zoomBy(0.99, 0, 0);
+    c.zoomBy(0.99, 0, 0);   // near boundary but inside dead-band
     const level1 = c.projCamera.level;
     c.zoomBy(-0.01, 0, 0);
     c.zoomBy(0.01, 0, 0);
@@ -44,5 +44,47 @@ describe('HierCamera zoom pivot invariance (within a level)', () => {
     const screenAfter = c.frameToScreen(absX - after.sub.x, absY - after.sub.y);
     expect(screenAfter.x).toBeCloseTo(screenBefore.x, 6);
     expect(screenAfter.y).toBeCloseTo(screenBefore.y, 6);
+  });
+});
+
+describe('HierCamera.toLegacyCamera pivot invariance across level crossings', () => {
+  it('keeps a recorded world point under the pivot fixed on screen across many level crossings', () => {
+    // Regression test: toLegacyCamera() once omitted the 2^-level factor, so
+    // (cell*LOCAL_SPAN+sub) alone is NOT level-invariant — rescaleCell doubles/halves it on
+    // every level crossing even with zero pan. That broke exactly this scenario: draw a point,
+    // zoom out through several level boundaries, and the point should still land where the
+    // pure zoom-about-pivot physics predicts.
+    const c = new HierCamera();
+    const PIVOT_SX = 900;
+    const before = c.toLegacyCamera();
+    const worldX = 700 / before.zoom + before.x; // record a point at screen x=700, level 0
+
+    const ZOOM_OUT = Math.log2(1 / 1.12);
+    for (let i = 0; i < 10; i++) {
+      const pivot = c.screenToFrame(PIVOT_SX, 0);
+      c.zoomBy(ZOOM_OUT, pivot.x, pivot.y);
+    }
+    expect(c.projCamera.level).toBeLessThan(0); // sanity: this test must cross ≥1 level boundary
+
+    const after = c.toLegacyCamera();
+    const screenX = (worldX - after.x) * after.zoom;
+    const expected = PIVOT_SX + (700 - PIVOT_SX) * c.scale;
+    expect(screenX).toBeCloseTo(expected, 6);
+  });
+});
+
+describe('HierCamera.toLegacyCamera render-zoom clamp', () => {
+  it('clamps zoom so extreme levels never produce Infinity/NaN downstream', () => {
+    const c = new HierCamera();
+    c.zoomBy(2000, 0, 0); // far past RENDER_LOG_LIMIT
+    const { zoom } = c.toLegacyCamera();
+    expect(Number.isFinite(zoom)).toBe(true);
+    expect(zoom).toBeGreaterThan(0);
+  });
+
+  it('does not clamp logZoom itself (HUD stays conceptually unbounded)', () => {
+    const c = new HierCamera();
+    c.zoomBy(2000, 0, 0);
+    expect(c.logZoom).toBeGreaterThan(600); // unclamped, unlike toLegacyCamera().zoom
   });
 });

@@ -1,7 +1,12 @@
 import { LOCAL_SPAN } from '@shared/anchor';
+import type { Camera } from '@shared/camera';
 import type { ProjCamera } from '../coords/viewProject';
 
 const HYSTERESIS = 0.05; // dead-band at level boundaries to stop half-pixel jitter
+
+// Matches the old CameraController's render-zoom clamp: exp(700) is still float64-safe but
+// float32 (PixiJS transforms) overflows well before that. logZoom itself stays unbounded.
+const RENDER_LOG_LIMIT = 600;
 
 /**
  * Hierarchical camera: integer `level` + BigInt `cell` + sub-cell float offset + fractional
@@ -80,5 +85,38 @@ export class HierCamera {
     while (this.subX < 0) { this.subX += LOCAL_SPAN; this.cellX -= 1n; }
     while (this.subY >= LOCAL_SPAN) { this.subY -= LOCAL_SPAN; this.cellY += 1n; }
     while (this.subY < 0) { this.subY += LOCAL_SPAN; this.cellY -= 1n; }
+  }
+
+  /** Legacy float64 view of this camera's reference point (top-left of viewport) and zoom.
+   *  Recomputed fresh from the BigInt cell + float sub each call — never accumulates drift,
+   *  but still loses precision once cell*LOCAL_SPAN exceeds float64's exact-integer range
+   *  (same limit the old CameraController always had; unchanged consumers rely on this).
+   *  The `2^-level` factor is required: (cell*LOCAL_SPAN+sub) alone is NOT level-invariant —
+   *  rescaleCell doubles/halves it on every level crossing, purely from zooming with no pan. */
+  toLegacyCamera(): Camera {
+    const f = 2 ** -this.level;
+    const clampedLog = Math.max(-RENDER_LOG_LIMIT, Math.min(RENDER_LOG_LIMIT, this.logZoom));
+    return {
+      x: (Number(this.cellX) * LOCAL_SPAN + this.subX) * f,
+      y: (Number(this.cellY) * LOCAL_SPAN + this.subY) * f,
+      zoom: Math.exp(clampedLog),
+    };
+  }
+
+  /** ln(zoom), matching the old CameraController.logZoom contract (for the HUD's "10^n" format). */
+  get logZoom(): number {
+    return (this.level + this.frac) * Math.LN2;
+  }
+
+  /** Screen px → this camera's frame-local units (inverse of frameToScreen). */
+  screenToFrame(sx: number, sy: number): { x: number; y: number } {
+    const p = 2 ** -this.frac;
+    return { x: sx * p, y: sy * p };
+  }
+
+  /** Screen px → legacy float64 world point (matches CameraController.toWorld exactly). */
+  toWorld(screenX: number, screenY: number): { x: number; y: number } {
+    const legacy = this.toLegacyCamera();
+    return { x: screenX / legacy.zoom + legacy.x, y: screenY / legacy.zoom + legacy.y };
   }
 }

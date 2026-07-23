@@ -1,6 +1,6 @@
 import { Application } from 'pixi.js';
 import type { BrushStroke, Color } from '@shared/stroke';
-import { CameraController } from './Camera';
+import { HierCamera } from './HierCamera';
 import { GridBackground } from './GridBackground';
 import { StrokeRenderer } from '../drawing/StrokeRenderer';
 import { CanvasState, type RendererInstruction } from '../state/CanvasState';
@@ -31,7 +31,7 @@ function defaultSettings(): ToolSettings {
 
 export class PixiApp {
   private app!: Application;
-  private camera!: CameraController;
+  private camera!: HierCamera;
   private grid!: GridBackground;
   private state!: CanvasState;
   private renderer!: StrokeRenderer;
@@ -58,7 +58,7 @@ export class PixiApp {
     });
     container.appendChild(this.app.canvas as HTMLCanvasElement);
 
-    this.camera = new CameraController();
+    this.camera = new HierCamera();
     this.state = new CanvasState();
     this.zoomHud = document.getElementById('hud')!;
 
@@ -112,7 +112,7 @@ export class PixiApp {
 
   private tick(): void {
     const { width, height } = this.app.screen;
-    const camera = this.camera.getSnapshot();
+    const camera = this.camera.toLegacyCamera();
     this.grid.draw(camera, width, height);
     this.renderer.redraw(camera, width, height);
     this.tools.refreshPreview(camera);
@@ -144,7 +144,7 @@ export class PixiApp {
 
   private handlePointerMove(e: PointerEvent, canvas: HTMLCanvasElement): void {
     if (this.isPanning) {
-      this.camera.pan(e.clientX - this.lastPanX, e.clientY - this.lastPanY);
+      this.camera.panPixels(e.clientX - this.lastPanX, e.clientY - this.lastPanY);
       this.lastPanX = e.clientX;
       this.lastPanY = e.clientY;
       return;
@@ -172,7 +172,8 @@ export class PixiApp {
     e.preventDefault();
     const factor = e.deltaY < 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR;
     const rect = canvas.getBoundingClientRect();
-    this.camera.zoomAt(factor, e.clientX - rect.left, e.clientY - rect.top);
+    const pivot = this.camera.screenToFrame(e.clientX - rect.left, e.clientY - rect.top);
+    this.camera.zoomBy(Math.log2(factor), pivot.x, pivot.y);
   }
 
   private handleKeyDown(e: KeyboardEvent): void {
@@ -196,7 +197,7 @@ export class PixiApp {
 
   private context(e: PointerEvent, rect: DOMRect): ToolContext {
     const world = this.camera.toWorld(e.clientX - rect.left, e.clientY - rect.top);
-    return { world, pressure: e.pressure, zoom: this.camera.zoom };
+    return { world, pressure: e.pressure, zoom: this.camera.toLegacyCamera().zoom };
   }
 }
 
