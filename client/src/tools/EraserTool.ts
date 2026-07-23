@@ -1,27 +1,30 @@
 import { Graphics } from 'pixi.js';
 import type { BrushStroke, Point } from '@shared/stroke';
 import { StrokeType } from '@shared/stroke';
-import type { Camera } from '@shared/camera';
-import type { BoundingBox } from '../drawing/Culling';
-import { strokeToRings } from '../drawing/strokeToPath';
+import type { ProjCamera } from '../coords/viewProject';
+import type { HierCamera } from '../app/HierCamera';
+import { frameScaleOf } from '../coords/viewScale';
 import { eraserStamp, subtractStamp } from '../drawing/eraseGeometry';
-import { buildStroke } from './strokeFactory';
-import type { Tool, ToolContext, ToolSettings, CanvasApi } from './Tool';
+import { anchoredStroke } from './strokeFactory';
+import type { FramePoint } from '../drawing/anchorCommit';
+import type { Tool, ToolContext, ToolSettings, CanvasApi, FrameBox } from './Tool';
 
 const CURSOR_COLOR = 0x999999;
 
 type Pair = [number, number];
 
 /**
- * Vector eraser. Subtracts a capsule-shaped stamp (swept under the cursor) from each
- * stroke's rendered area — erasing exactly what's under the eraser, anywhere on a stroke
- * or fill, live, and recorded as a single undo step.
+ * Vector eraser. Subtracts a capsule-shaped stamp (swept under the cursor) from each stroke's
+ * rendered area, working entirely in the camera frame so precision holds at any zoom depth.
+ * Remnants are re-anchored and keep the source stroke's colour and paint order.
  */
 export class EraserTool implements Tool {
   readonly preview = new Graphics();
   private last: Point | null = null;
   private cursor: Point | null = null;
-  private worldRadius = 1;
+  private camera: ProjCamera | null = null;
+  private cameraScale = 1;
+  private frameRadius = 1;
   private erasing = false;
 
   constructor(
@@ -31,18 +34,16 @@ export class EraserTool implements Tool {
 
   onDown(ctx: ToolContext): void {
     this.erasing = true;
-    this.worldRadius = this.settings.size / 2 / ctx.zoom;
-    this.cursor = { ...ctx.world };
-    this.eraseStep([ctx.world]);
-    this.last = { ...ctx.world };
+    this.beginGesture(ctx);
+    this.eraseStep([ctx.frame]);
+    this.last = { ...ctx.frame };
   }
 
   onMove(ctx: ToolContext): void {
-    this.cursor = { ...ctx.world };
-    this.worldRadius = this.settings.size / 2 / ctx.zoom;
+    this.beginGesture(ctx);
     if (!this.erasing || !this.last) return;
-    this.eraseStep([this.last, ctx.world]);
-    this.last = { ...ctx.world };
+    this.eraseStep([this.last, ctx.frame]);
+    this.last = { ...ctx.frame };
   }
 
   onUp(): void {
@@ -59,48 +60,59 @@ export class EraserTool implements Tool {
     this.preview.clear();
   }
 
-  refreshPreview(camera: Camera): void {
+  refreshPreview(camera: HierCamera): void {
     this.preview.clear();
     if (!this.cursor) return;
-    const cx = (this.cursor.x - camera.x) * camera.zoom;
-    const cy = (this.cursor.y - camera.y) * camera.zoom;
-    this.preview.circle(cx, cy, this.worldRadius * camera.zoom).stroke({ color: CURSOR_COLOR, width: 1 });
+    const s = camera.frameToScreen(this.cursor.x, this.cursor.y);
+    this.preview.circle(s.x, s.y, this.settings.size / 2).stroke({ color: CURSOR_COLOR, width: 1 });
+  }
+
+  private beginGesture(ctx: ToolContext): void {
+    this.cursor = { ...ctx.frame };
+    this.camera = ctx.projCamera;
+    this.cameraScale = ctx.cameraScale;
+    const frameScale = frameScaleOf(ctx.cameraScale, ctx.projCamera.level);
+    this.frameRadius = this.settings.size / 2 / frameScale;
   }
 
   private eraseStep(path: Point[]): void {
-    const stamp = eraserStamp(path, this.worldRadius);
-    const bbox = expand(pathBBox(path), this.worldRadius);
+    if (!this.camera) return;
+    const stamp = eraserStamp(path, this.frameRadius);
+    const box = expand(pathBox(path), this.frameRadius);
     const removeIds: string[] = [];
     const additions: BrushStroke[] = [];
-    for (const stroke of this.api.strokesNear(bbox)) {
-      const result = subtractStamp(strokeToRings(stroke), stamp);
+    for (const cand of this.api.strokesInFrame(box, this.camera)) {
+      const result = subtractStamp(cand.frameRings, stamp);
       if (result === null) continue; // stamp didn't touch this stroke
-      removeIds.push(stroke.id);
-      for (const poly of result) additions.push(remnant(poly, stroke));
+      removeIds.push(cand.stroke.id);
+      for (const poly of result) additions.push(this.remnant(poly, cand.stroke));
     }
     if (removeIds.length > 0) this.api.eraseLive(removeIds, additions);
   }
+
+  // a leftover polygon (outer + holes, frame coords) → an anchored filled stroke, same colour/z
+  private remnant(poly: Pair[][], source: BrushStroke): BrushStroke {
+    return anchoredStroke({
+      type: StrokeType.BRUSH,
+      color: source.color,
+      screenSize: 1,
+      framePoints: toFramePoints(poly[0]!),
+      frameHoles: poly.slice(1).map(toFramePoints),
+      layerId: source.layerId,
+      camera: this.camera!,
+      cameraScale: this.cameraScale,
+      zIndex: source.zIndex,
+      filled: true,
+      ...(source.background ? { background: true } : {}),
+    });
+  }
 }
 
-// a leftover polygon (outer ring + holes) becomes a filled stroke keeping the original color
-function remnant(poly: Pair[][], source: BrushStroke): BrushStroke {
-  return buildStroke({
-    type: StrokeType.BRUSH,
-    color: source.color,
-    size: 1,
-    points: toPoints(poly[0]!),
-    layerId: source.layerId,
-    filled: true,
-    holes: poly.slice(1).map(toPoints),
-    ...(source.background ? { background: true } : {}),
-  });
-}
-
-function toPoints(ring: Pair[]): Point[] {
+function toFramePoints(ring: Pair[]): FramePoint[] {
   return ring.map(([x, y]) => ({ x, y }));
 }
 
-function pathBBox(path: Point[]): BoundingBox {
+function pathBox(path: Point[]): FrameBox {
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -114,6 +126,6 @@ function pathBBox(path: Point[]): BoundingBox {
   return { minX, minY, maxX, maxY };
 }
 
-function expand(b: BoundingBox, r: number): BoundingBox {
+function expand(b: FrameBox, r: number): FrameBox {
   return { minX: b.minX - r, minY: b.minY - r, maxX: b.maxX + r, maxY: b.maxY + r };
 }

@@ -1,5 +1,5 @@
 import { Container } from 'pixi.js';
-import type { Camera } from '@shared/camera';
+import type { HierCamera } from '../app/HierCamera';
 import type { Color } from '@shared/stroke';
 import type { Tool, ToolSettings, CanvasApi } from './Tool';
 import { BrushTool } from './BrushTool';
@@ -43,7 +43,7 @@ export class ToolManager {
     this.current = id;
   }
 
-  refreshPreview(camera: Camera): void {
+  refreshPreview(camera: HierCamera): void {
     this.active.refreshPreview(camera);
   }
 }

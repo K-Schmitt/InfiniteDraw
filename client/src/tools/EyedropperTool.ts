@@ -15,7 +15,7 @@ export class EyedropperTool implements Tool {
   ) {}
 
   onDown(ctx: ToolContext): void {
-    const color = this.api.pickColorAt(ctx.world);
+    const color = this.api.pickColorAt(ctx.frame, ctx.projCamera);
     if (color) this.onPick({ ...color });
   }
 

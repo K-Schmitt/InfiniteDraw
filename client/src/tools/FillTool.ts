@@ -1,7 +1,8 @@
 import { Container } from 'pixi.js';
-import type { BrushStroke, Point } from '@shared/stroke';
+import type { BrushStroke } from '@shared/stroke';
 import { StrokeType } from '@shared/stroke';
-import { buildStroke } from './strokeFactory';
+import { anchoredStroke, type AnchoredSpec } from './strokeFactory';
+import type { FramePoint } from '../drawing/anchorCommit';
 import type { Tool, ToolContext, ToolSettings, CanvasApi } from './Tool';
 
 /** Paint-bucket: fills the empty region enclosed by surrounding strokes under the click. */
@@ -14,10 +15,10 @@ export class FillTool implements Tool {
   ) {}
 
   onDown(ctx: ToolContext): void {
-    const target = this.api.fillTarget(ctx.world, this.settings.primary);
+    const target = this.api.fillTarget(ctx.frame, ctx.projCamera, this.settings.primary);
     if (!target) return;
     if (target.kind === 'recolor') this.api.recolorMany(target.ids, this.settings.primary);
-    else this.api.add(this.makeFill(target.rings, target.background));
+    else this.api.add(this.makeFill(target.rings, target.background, ctx));
   }
 
   onMove(): void {}
@@ -25,23 +26,26 @@ export class FillTool implements Tool {
   cancel(): void {}
   refreshPreview(): void {}
 
-  // rings = [outerRing, ...holeRings] (flat world coords)
-  private makeFill(rings: number[][], background: boolean): BrushStroke {
-    return buildStroke({
+  // rings = [outerRing, ...holeRings] as flat camera-frame coords → anchored filled stroke
+  private makeFill(rings: number[][], background: boolean, ctx: ToolContext): BrushStroke {
+    const spec: AnchoredSpec = {
       type: StrokeType.BRUSH,
       color: this.settings.primary,
-      size: 1,
-      points: ringToPoints(rings[0]!),
+      screenSize: 1,
+      framePoints: ringToFramePoints(rings[0]!),
+      frameHoles: rings.slice(1).map(ringToFramePoints),
       layerId: this.settings.layerId,
+      camera: ctx.projCamera,
+      cameraScale: ctx.cameraScale,
       filled: true,
-      holes: rings.slice(1).map(ringToPoints),
       ...(background ? { background: true } : {}),
-    });
+    };
+    return anchoredStroke(spec);
   }
 }
 
-function ringToPoints(flat: number[]): Point[] {
-  const points: Point[] = [];
+function ringToFramePoints(flat: number[]): FramePoint[] {
+  const points: FramePoint[] = [];
   for (let i = 0; i < flat.length; i += 2) points.push({ x: flat[i]!, y: flat[i + 1]! });
   return points;
 }

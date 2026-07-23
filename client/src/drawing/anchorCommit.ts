@@ -4,7 +4,7 @@ import { frameToAnchor } from '../coords/worldAnchor';
 import type { ProjCamera } from '../coords/viewProject';
 import type { Bbox } from './SpatialIndex';
 
-interface FramePoint {
+export interface FramePoint {
   x: number;
   y: number;
 }
@@ -18,13 +18,13 @@ export function commitAnchor(
   framePoints: readonly FramePoint[],
   camera: ProjCamera,
 ): { anchor: CellAnchor; localPoints: FramePoint[]; cellBbox: Bbox } {
-  const anchor = minimalEnclosingAnchor(framePoints, camera);
-  const localPoints = reprojectToAnchor(framePoints, camera, anchor);
-  return { anchor, localPoints, cellBbox: bboxOf(anchor, localPoints) };
+  const anchor = anchorForPoints(framePoints, camera);
+  const localPoints = reprojectPointsToAnchor(framePoints, camera, anchor);
+  return { anchor, localPoints, cellBbox: cellBboxOfLocal(anchor, localPoints) };
 }
 
-// Finest level (≤ camera.level) whose single cell contains the gesture's min AND max corner.
-function minimalEnclosingAnchor(pts: readonly FramePoint[], camera: ProjCamera): CellAnchor {
+/** Finest level (≤ camera.level) whose single cell contains the whole gesture bbox. */
+export function anchorForPoints(pts: readonly FramePoint[], camera: ProjCamera): CellAnchor {
   const { minFx, minFy, maxFx, maxFy } = frameBbox(pts);
   const lo = frameToAnchor(minFx, minFy, camera).anchor.cell;
   const hi = frameToAnchor(maxFx, maxFy, camera).anchor.cell;
@@ -40,8 +40,8 @@ function minimalEnclosingAnchor(pts: readonly FramePoint[], camera: ProjCamera):
   return { level, cell: { x: minX, y: minY } };
 }
 
-// Camera-frame points → anchor-cell-local coords: shift into the anchor origin, then ÷ 2^gap.
-function reprojectToAnchor(
+/** Camera-frame points → anchor-cell-local coords: shift into the anchor origin, then ÷ 2^gap. */
+export function reprojectPointsToAnchor(
   pts: readonly FramePoint[],
   camera: ProjCamera,
   anchor: CellAnchor,
@@ -70,7 +70,8 @@ function frameBbox(pts: readonly FramePoint[]): {
   return { minFx, minFy, maxFx, maxFy };
 }
 
-function bboxOf(anchor: CellAnchor, pts: readonly FramePoint[]): Bbox {
+/** Cell-space bbox (BigInt) of anchor-local points, for viewport culling before any float. */
+export function cellBboxOfLocal(anchor: CellAnchor, pts: readonly FramePoint[]): Bbox {
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;

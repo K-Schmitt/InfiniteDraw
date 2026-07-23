@@ -1,6 +1,6 @@
 import { Graphics } from 'pixi.js';
 import type { BrushStroke } from '@shared/stroke';
-import type { Camera } from '@shared/camera';
+import type { HierCamera } from '../app/HierCamera';
 import { StrokeRecorder } from '../drawing/StrokeRecorder';
 import { strokeToRings } from '../drawing/strokeToPath';
 import { fillRings, type FillOptions } from '../drawing/fillRings';
@@ -27,17 +27,18 @@ export class BrushTool implements Tool {
     this.recorder.begin({
       id: crypto.randomUUID(),
       color: { ...this.settings.primary },
-      size: this.settings.size / ctx.zoom, // constant on-screen thickness at any zoom
+      screenSize: this.settings.size, // constant on-screen thickness at any zoom
       layerId: this.settings.layerId,
-      x: ctx.world.x,
-      y: ctx.world.y,
+      frame: { ...ctx.frame },
       pressure: ctx.pressure,
+      camera: ctx.projCamera,
+      cameraScale: ctx.cameraScale,
     });
   }
 
   onMove(ctx: ToolContext): void {
     if (!this.recorder.isRecording()) return;
-    this.recorder.addPoint(ctx.world.x, ctx.world.y, ctx.pressure);
+    this.recorder.addPoint(ctx.frame.x, ctx.frame.y, ctx.pressure);
   }
 
   onUp(): void {
@@ -51,12 +52,12 @@ export class BrushTool implements Tool {
     this.resetPreview();
   }
 
-  refreshPreview(camera: Camera): void {
+  refreshPreview(camera: HierCamera): void {
     if (!this.recorder.isRecording()) return;
     const stroke = this.recorder.getPreviewStroke();
     if (!stroke || stroke.points.length < 2) return;
     this.resolveRings(stroke);
-    this.drawPreview(stroke, camera);
+    this.drawPreview(stroke, camera.frameScale);
   }
 
   // resolves rings every frame (light strokes) or throttled (heavy) so closed shapes preview right
@@ -71,12 +72,12 @@ export class BrushTool implements Tool {
     }
   }
 
-  private drawPreview(stroke: Readonly<BrushStroke>, camera: Camera): void {
+  private drawPreview(stroke: Readonly<BrushStroke>, frameScale: number): void {
     this.preview.clear();
     const opts: FillOptions = {
-      originX: camera.x,
-      originY: camera.y,
-      scale: camera.zoom,
+      originX: 0,
+      originY: 0,
+      scale: frameScale,
       color: (stroke.color.r << 16) | (stroke.color.g << 8) | stroke.color.b,
       alpha: stroke.color.a / 255,
     };

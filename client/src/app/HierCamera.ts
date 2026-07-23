@@ -40,6 +40,11 @@ export class HierCamera {
     return 2 ** (this.level + this.frac);
   }
 
+  /** Pixels per camera-level local unit (= 2^frac); always finite (frac ∈ [0,1)). */
+  get frameScale(): number {
+    return 2 ** this.frac;
+  }
+
   /** A camera-frame local offset → screen pixels (pixels per local unit = 2^frac). */
   frameToScreen(fx: number, fy: number): { x: number; y: number } {
     const p = 2 ** this.frac;

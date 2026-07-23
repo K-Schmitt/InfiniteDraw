@@ -64,7 +64,7 @@ export class PixiApp {
 
     this.grid = new GridBackground();
     this.app.stage.addChild(this.grid.graphics);
-    this.renderer = new StrokeRenderer(this.app.renderer);
+    this.renderer = new StrokeRenderer();
     this.app.stage.addChild(this.renderer.container);
 
     this.tools = new ToolManager(this.settings, this.createCanvasApi(), (c) => this.applyPick(c));
@@ -81,9 +81,9 @@ export class PixiApp {
       add: (stroke) => this.commit(stroke),
       eraseLive: (removeIds, additions) => this.eraseLive(removeIds, additions),
       eraseEnd: () => this.state.commitErase(),
-      strokesNear: (bbox) => this.renderer.strokesNear(bbox),
-      pickColorAt: (world) => this.renderer.pickColorAt(world),
-      fillTarget: (world, color) => this.renderer.fillTarget(world, color),
+      strokesInFrame: (box, camera) => this.renderer.strokesInFrame(box, camera),
+      pickColorAt: (frame, camera) => this.renderer.pickColorAt(frame, camera),
+      fillTarget: (frame, camera, color) => this.renderer.fillTarget(frame, camera, color),
       recolorMany: (ids, color) => this.recolorMany(ids, color),
     };
   }
@@ -112,10 +112,9 @@ export class PixiApp {
 
   private tick(): void {
     const { width, height } = this.app.screen;
-    const camera = this.camera.toLegacyCamera();
-    this.grid.draw(camera, width, height);
-    this.renderer.redraw(camera, width, height);
-    this.tools.refreshPreview(camera);
+    this.grid.draw(this.camera.toLegacyCamera(), width, height);
+    this.renderer.redraw(this.camera.projCamera, this.camera.frameScale, width, height);
+    this.tools.refreshPreview(this.camera);
     this.zoomHud.textContent = formatZoom(this.camera.logZoom);
   }
 
@@ -196,8 +195,13 @@ export class PixiApp {
   }
 
   private context(e: PointerEvent, rect: DOMRect): ToolContext {
-    const world = this.camera.toWorld(e.clientX - rect.left, e.clientY - rect.top);
-    return { world, pressure: e.pressure, zoom: this.camera.toLegacyCamera().zoom };
+    const frame = this.camera.screenToFrame(e.clientX - rect.left, e.clientY - rect.top);
+    return {
+      frame,
+      projCamera: this.camera.projCamera,
+      cameraScale: this.camera.scale,
+      pressure: e.pressure,
+    };
   }
 }
 

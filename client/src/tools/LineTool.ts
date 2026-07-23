@@ -1,8 +1,9 @@
 import { Graphics } from 'pixi.js';
 import type { BrushStroke, Color, Point } from '@shared/stroke';
 import { StrokeType } from '@shared/stroke';
-import type { Camera } from '@shared/camera';
-import { buildStroke } from './strokeFactory';
+import type { ProjCamera } from '../coords/viewProject';
+import type { HierCamera } from '../app/HierCamera';
+import { buildStroke, anchoredStroke } from './strokeFactory';
 import { drawStrokePreview } from './strokePreview';
 import type { Tool, ToolContext, ToolSettings, CanvasApi } from './Tool';
 
@@ -11,7 +12,8 @@ export class LineTool implements Tool {
   readonly preview = new Graphics();
   private start: Point | null = null;
   private end: Point | null = null;
-  private worldSize = 1;
+  private camera: ProjCamera | null = null;
+  private cameraScale = 1;
   private color: Color = { r: 0, g: 0, b: 0, a: 255 };
 
   constructor(
@@ -20,14 +22,15 @@ export class LineTool implements Tool {
   ) {}
 
   onDown(ctx: ToolContext): void {
-    this.start = { ...ctx.world };
-    this.end = { ...ctx.world };
-    this.worldSize = this.settings.size / ctx.zoom;
+    this.start = { ...ctx.frame };
+    this.end = { ...ctx.frame };
+    this.camera = ctx.projCamera;
+    this.cameraScale = ctx.cameraScale;
     this.color = { ...this.settings.primary };
   }
 
   onMove(ctx: ToolContext): void {
-    if (this.start) this.end = { ...ctx.world };
+    if (this.start) this.end = { ...ctx.frame };
   }
 
   onUp(): void {
@@ -38,24 +41,34 @@ export class LineTool implements Tool {
   cancel(): void {
     this.start = null;
     this.end = null;
+    this.camera = null;
     this.preview.clear();
   }
 
-  refreshPreview(camera: Camera): void {
-    if (this.start && this.end) drawStrokePreview(this.preview, this.makeStroke(), camera);
+  refreshPreview(camera: HierCamera): void {
+    if (this.start && this.end) drawStrokePreview(this.preview, this.previewStroke(camera), camera.frameScale);
   }
 
   private commit(): void {
-    if (!this.start || !this.end) return;
+    if (!this.start || !this.end || !this.camera) return;
     if (this.start.x === this.end.x && this.start.y === this.end.y) return;
-    this.api.add(this.makeStroke());
+    this.api.add(anchoredStroke({
+      type: StrokeType.LINE,
+      color: this.color,
+      screenSize: this.settings.size,
+      framePoints: [{ ...this.start }, { ...this.end }],
+      layerId: this.settings.layerId,
+      camera: this.camera,
+      cameraScale: this.cameraScale,
+    }));
   }
 
-  private makeStroke(): BrushStroke {
+  // frame-local stroke for the live preview (points frame, width in frame units)
+  private previewStroke(camera: HierCamera): BrushStroke {
     return buildStroke({
       type: StrokeType.LINE,
       color: this.color,
-      size: this.worldSize,
+      size: this.settings.size / camera.frameScale,
       points: [{ ...this.start! }, { ...this.end! }],
       layerId: this.settings.layerId,
     });
