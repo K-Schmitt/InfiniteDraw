@@ -38,7 +38,7 @@ export class CollabServer {
       ServerToClientEvents,
       InterServerEvents,
       SocketData
-    >(httpServer, { cors: { origin: process.env['CLIENT_ORIGIN'] ?? 'http://localhost:5173' } });
+    >(httpServer, { cors: { origin: allowedOrigins() } });
 
     this.io.on('connection', (socket) => this.onConnection(socket));
   }
@@ -266,6 +266,18 @@ export class CollabServer {
       color: colors[index]!,
     };
   }
+}
+
+/**
+ * Socket.io origins. In production the client is served from this same origin, so CORS is
+ * irrelevant and the dev default would *block* the real site — hence `true` (reflect the
+ * request origin) when CLIENT_ORIGIN is unset in production. Set CLIENT_ORIGIN to a
+ * comma-separated allowlist to pin it.
+ */
+function allowedOrigins(): string[] | boolean {
+  const configured = process.env['CLIENT_ORIGIN'];
+  if (configured) return configured.split(',').map((o) => o.trim());
+  return process.env['NODE_ENV'] === 'production' ? true : ['http://localhost:5173'];
 }
 
 function emptyProject(strokes: readonly BrushStroke[]): Project {

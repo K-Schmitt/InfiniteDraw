@@ -1,6 +1,8 @@
 import express from 'express';
 import { createServer } from 'node:http';
+import { resolve } from 'node:path';
 import { CollabServer } from './CollabServer.js';
+import { serveClient } from './staticSite.js';
 import { log, logFilePath, installProcessHooks } from './debug/logger.js';
 
 installProcessHooks();
@@ -14,6 +16,11 @@ app.get('/health', (_req, res) => {
   log('net', 'GET /health');
   res.json({ status: 'ok' });
 });
+
+// Repo layout in the container: /app/client/dist and /app/server/dist/server/src/index.js.
+// CLIENT_DIST overrides for other layouts.
+const clientDist = process.env['CLIENT_DIST'] ?? resolve(process.cwd(), 'client/dist');
+serveClient(app, clientDist);
 
 httpServer.on('error', (err: NodeJS.ErrnoException) => {
   if (err.code === 'EADDRINUSE') {
