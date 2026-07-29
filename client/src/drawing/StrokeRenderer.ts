@@ -11,6 +11,7 @@ import { StrokeStore, type StrokeItem } from './StrokeStore';
 import {
   ringsToFrame, ringArea, frameBboxOf, cameraInsideStroke, localBboxToFrame,
 } from './projectRings';
+import { decideFill, type FillCandidate } from './fillDecision';
 import { log, logThrottled } from '../debug/logger';
 
 const HIDE_THRESHOLD = 0.02;
@@ -201,24 +202,32 @@ export class StrokeRenderer {
   }
 
   /**
-   * Paint-bucket target. On an existing stroke → the connected same-color group to recolor. On
-   * empty canvas → a new fill of the enclosed region (bounded by other strokes), in frame coords.
+   * Paint-bucket target. Region-first: an enclosed region under the cursor wins over any stroke
+   * covering it, so a shape drawn *inside* an already-filled shape fills its own interior instead
+   * of recoloring its parent. Falls back to recoloring the stroke under an open-area click.
    */
   fillTarget(frame: Point, camera: ProjCamera, color: Color): FillTargetResult | null {
-    const target = this.topmostAt(frame, camera);
-    if (target) {
-      const ids = this.sameColorGroup(target, camera);
-      log('geom', 'fillTarget -> recolor group', {
-        frame, hitStroke: target.id, hitColor: target.color, groupSize: ids.length,
-      });
-      return { kind: 'recolor', ids };
-    }
-    const walls = this.wallsInFrame(camera, color);
-    const cell = enclosedRegionAt(frame, walls);
-    log('geom', cell ? 'fillTarget -> new region' : 'fillTarget -> NOTHING (open region)', {
-      frame, walls: walls.length, ringCount: cell?.length ?? 0,
+    const projected = this.projectedInViewport(camera);
+    const walls = selectFillWalls(
+      projected.map((c) => ({ stroke: c.stroke, rings: c.frameRings })),
+      color,
+    );
+    const region = enclosedRegionAt(frame, walls);
+    const decision = decideFill(frame, region, projected.map(toFillCandidate));
+    log('geom', `fillTarget -> ${decision.kind}`, {
+      frame, walls: walls.length, ringCount: region?.length ?? 0, visible: projected.length,
     });
-    return cell ? { kind: 'fill', rings: cell, background: true } : null;
+    if (decision.kind === 'fill') return { kind: 'fill', rings: decision.rings, background: true };
+    if (decision.kind === 'recolorRegion') return { kind: 'recolor', ids: [decision.fillId] };
+    if (decision.kind === 'recolorStroke') return this.recolorGroupOf(decision.strokeId, camera);
+    return null;
+  }
+
+  /** Recolor target for a direct stroke hit: the connected same-color group around it. */
+  private recolorGroupOf(strokeId: string, camera: ProjCamera): FillTargetResult | null {
+    const item = this.store.get(strokeId);
+    if (!item) return null;
+    return { kind: 'recolor', ids: this.sameColorGroup(item.stroke, camera) };
   }
 
   // smallest-area stroke (in frame units) containing the point — the visible top one
@@ -283,13 +292,6 @@ export class StrokeRenderer {
 
   private sameColorCandidates(start: BrushStroke, camera: ProjCamera): GroupCandidate[] {
     return this.projectedInViewport(camera).filter((c) => sameColor(c.stroke.color, start.color));
-  }
-
-  private wallsInFrame(camera: ProjCamera, color: Color): number[][][] {
-    const candidates = this.projectedInViewport(camera).map((c) => ({
-      stroke: c.stroke, rings: c.frameRings,
-    }));
-    return selectFillWalls(candidates, color);
   }
 
   // ─── Render ──────────────────────────────────────────────────────────────
@@ -407,6 +409,10 @@ interface GroupCandidate {
 
 function paintOrder(stroke: BrushStroke): number {
   return stroke.background ? stroke.zIndex - BG_ORDER : stroke.zIndex;
+}
+
+function toFillCandidate(c: GroupCandidate): FillCandidate {
+  return { id: c.stroke.id, isBackground: !!c.stroke.background, frameRings: c.frameRings };
 }
 
 /** Larger of a stroke's local bbox dimensions — its on-screen span is this × anchor scale. */
