@@ -107,7 +107,7 @@ export class StrokeRenderer {
     }
     const before = item.stroke.zIndex;
     item.stroke.zIndex = zIndex;
-    p.gfx.zIndex = paintOrder(item.stroke);
+    p.gfx.zIndex = paintOrder(!!item.stroke.background, item.stroke.zIndex);
     log('render', 'setPaintOrder', { id, before, after: zIndex, gfxZ: p.gfx.zIndex });
   }
 
@@ -120,7 +120,7 @@ export class StrokeRenderer {
     this.store.add(stroke, rings);
     const gfx = new Graphics();
     fillRings(gfx, rings, fillOptions(stroke));
-    gfx.zIndex = paintOrder(stroke);
+    gfx.zIndex = paintOrder(!!stroke.background, stroke.zIndex);
     this.placements.set(stroke.id, { gfx, mode: 'baked' });
     this.vectorLayer.addChild(gfx);
     this.last = null;
@@ -407,8 +407,9 @@ interface GroupCandidate {
   bounds: FrameBounds;
 }
 
-function paintOrder(stroke: BrushStroke): number {
-  return stroke.background ? stroke.zIndex - BG_ORDER : stroke.zIndex;
+/** Paint order for one stroke. Background fills sit a full BG_ORDER band below everything else. */
+export function paintOrder(isBackground: boolean, zIndex: number): number {
+  return isBackground ? zIndex - BG_ORDER : zIndex;
 }
 
 function toFillCandidate(c: GroupCandidate): FillCandidate {
