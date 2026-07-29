@@ -33,7 +33,7 @@ describe('RemoteStrokeQueue coalescing', () => {
   });
 
   it('keeps a delete of an already-committed stroke even with a queued echo add', () => {
-    const { sink, adds, deletes } = makeSink(['a']); // 'a' already in state (own echo / prior batch)
+    const { sink, deletes } = makeSink(['a']); // 'a' already in state (own echo / prior batch)
     const q = new RemoteStrokeQueue(sink);
     q.enqueueAdd(fakeStroke('a'));
     q.enqueueDelete('a');
