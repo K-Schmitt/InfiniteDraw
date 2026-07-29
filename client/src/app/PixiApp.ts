@@ -7,6 +7,7 @@ import { CanvasState, type RendererInstruction } from '../state/CanvasState';
 import { ToolManager, type ToolId } from '../tools/ToolManager';
 import type { ToolSettings, ToolContext, CanvasApi } from '../tools/Tool';
 import { Toolbar } from '../ui/Toolbar';
+import { ZenMode } from '../ui/ZenMode';
 import type { StrokeBeginPayload } from '@shared/socket-events';
 import { CollabClient, type CollabDelegate } from '../network/CollabClient';
 import { RemoteStrokeQueue, type RemoteOpSink } from '../network/RemoteStrokeQueue';
@@ -47,6 +48,7 @@ export class PixiApp {
   private renderer!: StrokeRenderer;
   private tools!: ToolManager;
   private toolbar!: Toolbar;
+  private zen!: ZenMode;
   private collabClient!: CollabClient;
   private remoteQueue!: RemoteStrokeQueue;
   private zoomHud!: HTMLElement;
@@ -96,6 +98,7 @@ export class PixiApp {
     this.app.stage.addChild(this.tools.previewLayer);
     this.toolbar = new Toolbar(this.settings, this.tools);
     document.body.appendChild(this.toolbar.root);
+    this.zen = new ZenMode(document.body);
 
     const delegate: CollabDelegate = {
       loadSnapshot: (strokes) => {
@@ -389,6 +392,8 @@ export class PixiApp {
       return this.run(this.state.redo());
     }
     if (isTypingTarget(e.target)) return;
+    if (key === 'escape') return this.zen.show();
+    if (key === 'z' && !mod) return void this.zen.toggle();
     if (key === 'x') return this.toolbar.swap();
     const tool = SHORTCUTS[key];
     if (tool) {

@@ -123,3 +123,20 @@
 #toolbar .palette-swatch:hover {
   transform: scale(1.08);
 }
+
+/* Zen mode — one class on <body> hides every piece of chrome. Transitioned rather than
+   display:none so re-entering does not reflow the canvas. */
+body.zen #toolbar,
+body.zen #help,
+body.zen #hud,
+body.zen #context-menu {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease-out;
+}
+
+#toolbar,
+#help,
+#hud {
+  transition: opacity 140ms ease-in;
+}
