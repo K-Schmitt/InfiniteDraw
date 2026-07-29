@@ -140,3 +140,43 @@ body.zen #context-menu {
 #hud {
   transition: opacity 140ms ease-in;
 }
+
+#context-menu {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 168px;
+  padding: 4px;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(8px);
+  font: 13px/1 'SF Mono', 'Consolas', monospace;
+  user-select: none;
+}
+
+#context-menu[hidden] { display: none; }
+
+#context-menu .context-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 7px 10px;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  color: #222;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+#context-menu .context-row:hover { background: rgba(0, 0, 0, 0.06); }
+
+#context-menu kbd {
+  color: #999;
+  font: inherit;
+}

@@ -8,6 +8,8 @@ import { ToolManager, type ToolId } from '../tools/ToolManager';
 import type { ToolSettings, ToolContext, CanvasApi } from '../tools/Tool';
 import { Toolbar } from '../ui/Toolbar';
 import { ZenMode } from '../ui/ZenMode';
+import { ContextMenu, classifyPointerDown } from '../ui/ContextMenu';
+import { buildContextMenuItems } from '../ui/contextMenuItems';
 import type { StrokeBeginPayload } from '@shared/socket-events';
 import { CollabClient, type CollabDelegate } from '../network/CollabClient';
 import { RemoteStrokeQueue, type RemoteOpSink } from '../network/RemoteStrokeQueue';
@@ -49,6 +51,7 @@ export class PixiApp {
   private tools!: ToolManager;
   private toolbar!: Toolbar;
   private zen!: ZenMode;
+  private contextMenu!: ContextMenu;
   private collabClient!: CollabClient;
   private remoteQueue!: RemoteStrokeQueue;
   private zoomHud!: HTMLElement;
@@ -99,6 +102,7 @@ export class PixiApp {
     this.toolbar = new Toolbar(this.settings, this.tools);
     document.body.appendChild(this.toolbar.root);
     this.zen = new ZenMode(document.body);
+    this.contextMenu = new ContextMenu(buildContextMenuItems(this.toolbar, this.zen));
 
     const delegate: CollabDelegate = {
       loadSnapshot: (strokes) => {
@@ -265,16 +269,10 @@ export class PixiApp {
     window.addEventListener('keydown', (e) => this.handleKeyDown(e));
   }
 
-  // right button pans; any other button drives the active tool
+  // right button pans (or opens the quick menu when modified); any other button drives the tool
   private handlePointerDown(e: PointerEvent, canvas: HTMLCanvasElement): void {
-    if (e.button === 2) {
-      this.isPanning = true;
-      this.lastPanX = e.clientX;
-      this.lastPanY = e.clientY;
-      canvas.style.cursor = 'grabbing';
-      log('camera', 'pan start', { x: e.clientX, y: e.clientY });
-      return;
-    }
+    if (e.button === 2) return this.handleRightClick(e, canvas);
+    this.contextMenu.close();
     canvas.setPointerCapture(e.pointerId);
     const ctx = this.context(e, canvas.getBoundingClientRect());
     log('tool', `${this.tools.activeId} onDown`, {
@@ -295,6 +293,20 @@ export class PixiApp {
         camera: serializableCamera(this.camera.projCamera),
       });
     }
+  }
+
+  private handleRightClick(e: PointerEvent, canvas: HTMLCanvasElement): void {
+    const intent = classifyPointerDown(e.button, e.ctrlKey || e.metaKey);
+    if (intent === 'menu') {
+      this.contextMenu.openAt(e.clientX, e.clientY);
+      return;
+    }
+    this.contextMenu.close();
+    this.isPanning = true;
+    this.lastPanX = e.clientX;
+    this.lastPanY = e.clientY;
+    canvas.style.cursor = 'grabbing';
+    log('camera', 'pan start', { x: e.clientX, y: e.clientY });
   }
 
   private handlePointerMove(e: PointerEvent, canvas: HTMLCanvasElement): void {
@@ -392,8 +404,14 @@ export class PixiApp {
       return this.run(this.state.redo());
     }
     if (isTypingTarget(e.target)) return;
-    if (key === 'escape') return this.zen.show();
-    if (key === 'z' && !mod) return void this.zen.toggle();
+    if (key === 'escape') {
+      this.contextMenu.close();
+      return this.zen.show();
+    }
+    if (key === 'z' && !mod) {
+      this.contextMenu.close();
+      return void this.zen.toggle();
+    }
     if (key === 'x') return this.toolbar.swap();
     const tool = SHORTCUTS[key];
     if (tool) {
