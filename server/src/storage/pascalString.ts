@@ -3,8 +3,13 @@
  * Layout: u32 byte-length prefix (little-endian) + UTF-8 body.
  */
 
+const MAX_PASCAL_LENGTH = 4096;
+
 export function writePascalString(text: string): Buffer {
   const body = Buffer.from(text, 'utf8');
+  if (body.length > MAX_PASCAL_LENGTH) {
+    throw new Error(`pascal string too long: ${body.length} > ${MAX_PASCAL_LENGTH}`);
+  }
   const header = Buffer.allocUnsafe(4);
   header.writeUInt32LE(body.length, 0);
   return Buffer.concat([header, body]);

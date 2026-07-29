@@ -59,6 +59,8 @@ export interface BrushStroke {
   points: Point[];
   pressures: number[];
   layerId: string;
+  /** User who created this stroke (set by server, never trusted from client). */
+  ownerId?: string;
   createdAt: number;
   /** Absolute hierarchical anchor; `points`/`holes` are cell-local floats in [0, LOCAL_SPAN). */
   anchor: CellAnchor;

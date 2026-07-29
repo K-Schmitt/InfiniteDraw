@@ -6,6 +6,7 @@ import type { HierCamera } from '../app/HierCamera';
 import { buildStroke, anchoredStroke } from './strokeFactory';
 import { drawStrokePreview } from './strokePreview';
 import type { Tool, ToolContext, ToolSettings, CanvasApi } from './Tool';
+import { log } from '../debug/logger';
 
 /** Straight line from press to release. Two-point stroke, constant on-screen thickness. */
 export class LineTool implements Tool {
@@ -28,6 +29,10 @@ export class LineTool implements Tool {
     this.camera = ctx.projCamera;
     this.cameraScale = ctx.cameraScale;
     this.color = { ...this.settings.primary };
+    log('tool', 'line begin', {
+      start: this.start, color: this.color, size: this.settings.size,
+      level: ctx.projCamera.level,
+    });
   }
 
   onMove(ctx: ToolContext): void {
@@ -51,8 +56,22 @@ export class LineTool implements Tool {
   }
 
   private commit(): void {
-    if (!this.start || !this.end || !this.camera) return;
-    if (this.start.x === this.end.x && this.start.y === this.end.y) return;
+    if (!this.start || !this.end || !this.camera) {
+      log('tool', 'line commit SKIPPED (no gesture)', { hasStart: !!this.start, hasCam: !!this.camera });
+      return;
+    }
+    if (this.start.x === this.end.x && this.start.y === this.end.y) {
+      log('tool', 'line commit SKIPPED (zero length)', { at: this.start });
+      return;
+    }
+    const dx = this.end.x - this.start.x;
+    const dy = this.end.y - this.start.y;
+    log('tool', 'line commit', {
+      start: this.start, end: this.end,
+      length: +Math.hypot(dx, dy).toFixed(3),
+      angleDeg: +((Math.atan2(dy, dx) * 180) / Math.PI).toFixed(2),
+      color: this.color, size: this.settings.size,
+    });
     this.api.add(anchoredStroke({
       type: StrokeType.LINE,
       color: this.color,

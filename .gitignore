@@ -39,6 +39,14 @@ client/coverage/
 saves/
 server/data/*.bin
 
+# Debug traces
+server/logs/
+logs/
+*.jsonl
+
+# Editor local history
+.history/
+
 # Vite cache
 client/.vite/
 .gitnexus

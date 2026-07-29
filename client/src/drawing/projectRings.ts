@@ -26,6 +26,23 @@ export function ringsToFrame(
   return out;
 }
 
+/**
+ * Project a stroke's anchor-local bbox into the camera frame using only its two corners.
+ * Per anchor the projection is `const + positiveScale · local` on each axis, so it is strictly
+ * increasing and the corners map to the frame bbox exactly. Lets callers reject a stroke in O(1)
+ * instead of projecting every vertex via `ringsToFrame`.
+ */
+export function localBboxToFrame(
+  anchor: CellAnchor,
+  bounds: LocalBounds,
+  camera: ProjCamera,
+): LocalBounds | null {
+  const lo = projectToFrame(anchor, bounds.minX, bounds.minY, camera);
+  const hi = projectToFrame(anchor, bounds.maxX, bounds.maxY, camera);
+  if (lo === CULLED || hi === CULLED) return null;
+  return { minX: lo.fx, minY: lo.fy, maxX: hi.fx, maxY: hi.fy };
+}
+
 /** Shoelace area of a flat [x0,y0,x1,y1,…] ring. */
 export function ringArea(ring: readonly number[]): number {
   let sum = 0;

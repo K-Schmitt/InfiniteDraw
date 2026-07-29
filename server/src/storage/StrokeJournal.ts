@@ -4,6 +4,7 @@ import { writePascalString, readPascalString } from './pascalString.js';
 import { encodeStroke, decodeStroke } from './strokeCodec.js';
 import { FILE_MAGIC, FILE_FORMAT_VERSION } from '../../../shared/types/project.js';
 import type { BrushStroke } from '@shared/stroke.js';
+import { log } from '../debug/logger.js';
 
 /**
  * Append-only binary journal for one room. The file IS the event log: a fixed header
@@ -21,12 +22,16 @@ export class StrokeJournal {
 
   static async open(path: string): Promise<StrokeJournal> {
     const journal = new StrokeJournal(path);
-    if (await exists(path)) {
+    const found = await exists(path);
+    if (found) {
       await journal.replay();
     } else {
       await mkdir(dirname(path), { recursive: true });
       await writeFile(path, header());
     }
+    log('store', found ? 'journal replayed' : 'journal created', {
+      path, strokes: journal.strokes.size,
+    });
     return journal;
   }
 
@@ -36,12 +41,15 @@ export class StrokeJournal {
 
   async appendStroke(stroke: BrushStroke): Promise<void> {
     this.strokes.set(stroke.id, stroke);
-    await appendFile(this.path, frame(OP_ADD, encodeStroke(stroke)));
+    const record = frame(OP_ADD, encodeStroke(stroke));
+    await appendFile(this.path, record);
+    log('store', 'journal ADD', { id: stroke.id, bytes: record.length, live: this.strokes.size });
   }
 
   async appendDelete(id: string): Promise<void> {
-    this.strokes.delete(id);
+    const known = this.strokes.delete(id);
     await appendFile(this.path, frame(OP_DELETE, writePascalString(id)));
+    log('store', 'journal DELETE', { id, known, live: this.strokes.size });
   }
 
   private async replay(): Promise<void> {

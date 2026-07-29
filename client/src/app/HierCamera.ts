@@ -1,6 +1,7 @@
 import { LOCAL_SPAN } from '@shared/anchor';
 import type { Camera } from '@shared/camera';
 import type { ProjCamera } from '../coords/viewProject';
+import { log } from '../debug/logger';
 
 const HYSTERESIS = 0.05; // dead-band at level boundaries to stop half-pixel jitter
 
@@ -104,8 +105,19 @@ export class HierCamera {
   }
 
   private normaliseLevel(): void {
-    while (this.frac >= 1 + HYSTERESIS) { this.frac -= 1; this.level += 1; this.rescaleCell(1); }
-    while (this.frac < -HYSTERESIS) { this.frac += 1; this.level -= 1; this.rescaleCell(-1); }
+    while (this.frac >= 1 + HYSTERESIS) {
+      this.frac -= 1; this.level += 1; this.rescaleCell(1);
+      log('camera', 'LEVEL UP', { level: this.level, cell: this.cellText(), frac: this.frac });
+    }
+    while (this.frac < -HYSTERESIS) {
+      this.frac += 1; this.level -= 1; this.rescaleCell(-1);
+      log('camera', 'LEVEL DOWN', { level: this.level, cell: this.cellText(), frac: this.frac });
+    }
+  }
+
+  /** BigInt cell rendered as text so camera logs stay JSON-serializable. */
+  private cellText(): string {
+    return `${this.cellX},${this.cellY}`;
   }
 
   // Moving a whole level rescales cell/sub by 2 (finer) or ½ (coarser), screen-invariant. On

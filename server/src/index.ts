@@ -1,6 +1,9 @@
 import express from 'express';
 import { createServer } from 'node:http';
 import { CollabServer } from './CollabServer.js';
+import { log, logFilePath, installProcessHooks } from './debug/logger.js';
+
+installProcessHooks();
 
 const app = express();
 const httpServer = createServer(app);
@@ -8,6 +11,7 @@ const httpServer = createServer(app);
 const PORT = process.env['PORT'] ?? 3000;
 
 app.get('/health', (_req, res) => {
+  log('net', 'GET /health');
   res.json({ status: 'ok' });
 });
 
@@ -25,4 +29,10 @@ new CollabServer(httpServer);
 
 httpServer.listen(PORT, () => {
   console.log(`InfiniteDraw server listening on :${PORT}`);
+  log('life', 'server listening', {
+    port: PORT,
+    pid: process.pid,
+    node: process.version,
+    logFile: logFilePath(),
+  });
 });

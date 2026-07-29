@@ -8,7 +8,10 @@ import { pointInRings } from './hitTest';
 import { enclosedRegionAt, ringsAdjacent } from './fillRegion';
 import { selectFillWalls, sameColor } from './fillWalls';
 import { StrokeStore, type StrokeItem } from './StrokeStore';
-import { ringsToFrame, ringArea, frameBboxOf, cameraInsideStroke, localBoundsOf } from './projectRings';
+import {
+  ringsToFrame, ringArea, frameBboxOf, cameraInsideStroke, localBboxToFrame,
+} from './projectRings';
+import { log, logThrottled } from '../debug/logger';
 
 const HIDE_THRESHOLD = 0.02;
 const MAX_SCREEN_STROKE_WIDTH = 2e34;
@@ -80,6 +83,7 @@ export class StrokeRenderer {
   private readonly store = new StrokeStore();
   private readonly placements = new Map<string, Placement>();
   private readonly vectorLayer = new Container();
+  private readonly pendingDestroy: Graphics[] = [];
   private last: CameraSnapshot | null = null;
   private screenW = 0;
   private screenH = 0;
@@ -90,7 +94,27 @@ export class StrokeRenderer {
     this.container.addChild(this.vectorLayer);
   }
 
+  /** Repaint order only — no geometry teardown. Used when the server echoes an author's own
+   *  stroke back with its authoritative zIndex: rebuilding the Graphics there would destroy
+   *  GPU buffers mid-frame (the socket callback can land inside a render pass). */
+  setPaintOrder(id: string, zIndex: number): void {
+    const item = this.store.get(id);
+    const p = this.placements.get(id);
+    if (!item || !p) {
+      log('render', 'setPaintOrder MISS', { id, hasItem: !!item, hasPlacement: !!p });
+      return;
+    }
+    const before = item.stroke.zIndex;
+    item.stroke.zIndex = zIndex;
+    p.gfx.zIndex = paintOrder(item.stroke);
+    log('render', 'setPaintOrder', { id, before, after: zIndex, gfxZ: p.gfx.zIndex });
+  }
+
+  /** Upsert: re-adding an id already on screen replaces it instead of leaking an orphaned gfx. */
   addStroke(stroke: BrushStroke): void {
+    const t0 = performance.now();
+    const replacing = this.placements.has(stroke.id);
+    this.removeStroke(stroke.id);
     const rings = strokeToRings(stroke);
     this.store.add(stroke, rings);
     const gfx = new Graphics();
@@ -99,6 +123,11 @@ export class StrokeRenderer {
     this.placements.set(stroke.id, { gfx, mode: 'baked' });
     this.vectorLayer.addChild(gfx);
     this.last = null;
+    log('render', 'addStroke', {
+      id: stroke.id, replacing, zIndex: gfx.zIndex,
+      ringCount: rings.length, vertices: rings.reduce((n, r) => n + r.length / 2, 0),
+      onScreen: this.placements.size, ms: +(performance.now() - t0).toFixed(2),
+    });
   }
 
   removeStroke(id: string): void {
@@ -106,10 +135,25 @@ export class StrokeRenderer {
     const p = this.placements.get(id);
     if (p) {
       this.vectorLayer.removeChild(p.gfx);
-      p.gfx.destroy();
+      // Freeing GPU buffers here is unsafe: removals arrive from socket callbacks that can
+      // land inside a render pass, leaving the batcher drawing against a destroyed geometry
+      // ("GL_INVALID_OPERATION: Insufficient buffer size"). Destroy between frames instead.
+      this.pendingDestroy.push(p.gfx);
       this.placements.delete(id);
+      log('render', 'removeStroke', {
+        id, mode: p.mode, queuedForDestroy: this.pendingDestroy.length,
+        onScreen: this.placements.size,
+      });
     }
     this.last = null;
+  }
+
+  /** Frees geometry retired since the last frame. Called from `redraw`, i.e. inside the ticker. */
+  private flushDestroyed(): void {
+    if (this.pendingDestroy.length === 0) return;
+    log('render', 'destroying retired graphics', { count: this.pendingDestroy.length });
+    for (const gfx of this.pendingDestroy) gfx.destroy();
+    this.pendingDestroy.length = 0;
   }
 
   /** Repaints an existing stroke with a new color in place (keeps its z-order). */
@@ -131,15 +175,28 @@ export class StrokeRenderer {
     return this.topmostAt(frame, camera)?.color;
   }
 
-  /** Candidate strokes overlapping a frame box, rings pre-projected (eraser broad phase). */
+  /** Candidate strokes overlapping a frame box, rings pre-projected (eraser broad phase).
+   *  Rejects on the projected bbox (2 projections) before paying for every vertex — this runs
+   *  per pointermove during an erase, so the per-stroke cost has to stay O(1) when it misses. */
   strokesInFrame(box: FrameBounds, camera: ProjCamera): FrameCandidate[] {
+    const t0 = performance.now();
     const out: FrameCandidate[] = [];
+    let scanned = 0;
+    let narrowPhase = 0;
     for (const item of this.store.all()) {
+      scanned++;
+      const frameBox = localBboxToFrame(item.stroke.anchor, item.ringBounds, camera);
+      if (!frameBox || !bboxOverlap(frameBox, box)) continue;
+      narrowPhase++;
       const frameRings = ringsToFrame(item.stroke.anchor, item.rings, camera);
       if (frameRings && bboxOverlap(frameBboxOf(frameRings), box)) {
         out.push({ stroke: item.stroke, frameRings });
       }
     }
+    const dt = performance.now() - t0;
+    const data = { scanned, narrowPhase, hits: out.length, ms: +dt.toFixed(2), box };
+    if (dt >= 16) log('error', `SLOW strokesInFrame ${dt.toFixed(1)}ms`, data);
+    else logThrottled('sif', 250, () => ({ cat: 'render', msg: 'strokesInFrame', data }));
     return out;
   }
 
@@ -149,10 +206,18 @@ export class StrokeRenderer {
    */
   fillTarget(frame: Point, camera: ProjCamera, color: Color): FillTargetResult | null {
     const target = this.topmostAt(frame, camera);
-    if (target) return { kind: 'recolor', ids: this.sameColorGroup(target, camera) };
-
+    if (target) {
+      const ids = this.sameColorGroup(target, camera);
+      log('geom', 'fillTarget -> recolor group', {
+        frame, hitStroke: target.id, hitColor: target.color, groupSize: ids.length,
+      });
+      return { kind: 'recolor', ids };
+    }
     const walls = this.wallsInFrame(camera, color);
     const cell = enclosedRegionAt(frame, walls);
+    log('geom', cell ? 'fillTarget -> new region' : 'fillTarget -> NOTHING (open region)', {
+      frame, walls: walls.length, ringCount: cell?.length ?? 0,
+    });
     return cell ? { kind: 'fill', rings: cell, background: true } : null;
   }
 
@@ -160,16 +225,43 @@ export class StrokeRenderer {
   private topmostAt(frame: Point, camera: ProjCamera): BrushStroke | undefined {
     let found: BrushStroke | undefined;
     let bestArea = Infinity;
-    for (const item of this.store.all()) {
-      const frameRings = ringsToFrame(item.stroke.anchor, item.rings, camera);
-      if (!frameRings || !pointInRings(frame.x, frame.y, frameRings)) continue;
-      const a = ringArea(frameRings[0] ?? []);
+    for (const cand of this.projectedInViewport(camera)) {
+      if (!pointInRings(frame.x, frame.y, cand.frameRings)) continue;
+      const a = ringArea(cand.frameRings[0] ?? []);
       if (a < bestArea) {
         bestArea = a;
-        found = item.stroke;
+        found = cand.stroke;
       }
     }
     return found;
+  }
+
+  /** Strokes whose projected bbox overlaps the viewport, rings pre-projected into the frame.
+   *  Fill/eyedropper only act on what's on screen, so this bounds every full scan (topmost, walls,
+   *  same-color group) to the visible set instead of the whole document — the difference between a
+   *  responsive click and a multi-second polygon-clipping stall at high stroke counts. */
+  private projectedInViewport(camera: ProjCamera): GroupCandidate[] {
+    const vp = this.viewportFrameBox();
+    const out: GroupCandidate[] = [];
+    for (const item of this.store.all()) {
+      if (vp) {
+        const fb = localBboxToFrame(item.stroke.anchor, item.ringBounds, camera);
+        if (!fb || !bboxOverlap(fb, vp)) continue;
+      }
+      const frameRings = ringsToFrame(item.stroke.anchor, item.rings, camera);
+      if (frameRings) out.push({ stroke: item.stroke, frameRings, bounds: frameBboxOf(frameRings) });
+    }
+    return out;
+  }
+
+  // Current viewport as a frame-space box (screen maps to frame via ×frameScale), padded so a
+  // fill's enclosing walls just off-screen still count. Null before the first redraw sets `last`.
+  private viewportFrameBox(): FrameBounds | null {
+    const l = this.last;
+    if (!l || !(l.frameScale > 0) || this.screenW === 0) return null;
+    const w = this.screenW / l.frameScale;
+    const h = this.screenH / l.frameScale;
+    return { minX: -w * 0.5, minY: -h * 0.5, maxX: w * 1.5, maxY: h * 1.5 };
   }
 
   // ids of same-color strokes connected (touching in the camera frame) to `start`
@@ -190,35 +282,43 @@ export class StrokeRenderer {
   }
 
   private sameColorCandidates(start: BrushStroke, camera: ProjCamera): GroupCandidate[] {
-    const out: GroupCandidate[] = [];
-    for (const item of this.store.all()) {
-      if (!sameColor(item.stroke.color, start.color)) continue;
-      const frameRings = ringsToFrame(item.stroke.anchor, item.rings, camera);
-      if (frameRings) out.push({ stroke: item.stroke, frameRings, bounds: frameBboxOf(frameRings) });
-    }
-    return out;
+    return this.projectedInViewport(camera).filter((c) => sameColor(c.stroke.color, start.color));
   }
 
   private wallsInFrame(camera: ProjCamera, color: Color): number[][][] {
-    const candidates = [];
-    for (const item of this.store.all()) {
-      const frameRings = ringsToFrame(item.stroke.anchor, item.rings, camera);
-      if (frameRings) candidates.push({ stroke: item.stroke, rings: frameRings });
-    }
+    const candidates = this.projectedInViewport(camera).map((c) => ({
+      stroke: c.stroke, rings: c.frameRings,
+    }));
     return selectFillWalls(candidates, color);
   }
 
   // ─── Render ──────────────────────────────────────────────────────────────
 
   redraw(camera: ProjCamera, frameScale: number, screenW: number, screenH: number): void {
+    this.flushDestroyed();
     this.screenW = screenW;
     this.screenH = screenH;
     if (this.unchanged(camera, frameScale)) return;
     this.last = snapshot(camera, frameScale);
-    for (const item of this.store.all()) this.place(item, camera, frameScale);
+    const t0 = performance.now();
+    let count = 0;
+    for (const item of this.store.all()) {
+      this.place(item, camera, frameScale);
+      count++;
+    }
+    const dt = performance.now() - t0;
+    const census = { baked: 0, frame: 0, bleed: 0, hidden: 0 };
+    for (const p of this.placements.values()) {
+      if (!p.gfx.visible) census.hidden++;
+      else census[p.mode]++;
+    }
+    const data = { strokes: count, ms: +dt.toFixed(2), level: camera.level, frameScale, ...census };
+    if (dt >= 16) log('error', `SLOW redraw ${dt.toFixed(1)}ms`, data);
+    else logThrottled('redraw', 500, () => ({ cat: 'render', msg: 'redraw', data }));
   }
 
   destroy(): void {
+    this.flushDestroyed();
     this.container.destroy({ children: true });
     this.store.clear();
     this.placements.clear();
@@ -236,7 +336,7 @@ export class StrokeRenderer {
       // 24-bit mantissa. Once you are zoomed so far in that its span exceeds that, its far
       // vertices overflow and rasterisation breaks — but at that depth the camera sits inside the
       // stroke, so hand off to the §4 bleed (fill viewport) / hide decision instead of baking it.
-      if (localSpanOf(item.rings) * scale > FRAME_MAX_SCREEN_SPAN) {
+      if (spanOf(item.ringBounds) * scale > FRAME_MAX_SCREEN_SPAN) {
         return this.placeCulled(item, p, camera);
       }
       return this.placeInFrame(item, p, camera, frameScale);
@@ -254,6 +354,12 @@ export class StrokeRenderer {
   ): void {
     const frameRings = ringsToFrame(item.stroke.anchor, item.rings, camera);
     if (frameRings === null) return this.placeCulled(item, p, camera);
+    if (p.mode !== 'frame') {
+      log('render', 'mode -> frame (deep zoom rebake)', {
+        id: item.stroke.id, from: p.mode, anchorLevel: item.stroke.anchor.level,
+        cameraLevel: camera.level,
+      });
+    }
     p.mode = 'frame';
     p.gfx.clear();
     fillRings(p.gfx, frameRings, fillOptions(item.stroke));
@@ -264,8 +370,14 @@ export class StrokeRenderer {
 
   // camera outside → hide; camera over a much-coarser stroke's extent → bleed a viewport fill (§4)
   private placeCulled(item: StrokeItem, p: Placement, camera: ProjCamera): void {
-    const inside = cameraInsideStroke(localBoundsOf(item.rings), item.stroke.anchor, camera);
+    const inside = cameraInsideStroke(item.ringBounds, item.stroke.anchor, camera);
     if (!inside) { p.gfx.visible = false; return; }
+    if (p.mode !== 'bleed') {
+      log('render', 'mode -> bleed (camera inside coarse stroke)', {
+        id: item.stroke.id, from: p.mode, anchorLevel: item.stroke.anchor.level,
+        cameraLevel: camera.level,
+      });
+    }
     p.mode = 'bleed';
     p.gfx.clear();
     p.gfx.position.set(0, 0);
@@ -298,8 +410,7 @@ function paintOrder(stroke: BrushStroke): number {
 }
 
 /** Larger of a stroke's local bbox dimensions — its on-screen span is this × anchor scale. */
-function localSpanOf(rings: readonly number[][]): number {
-  const b = localBoundsOf(rings);
+function spanOf(b: FrameBounds): number {
   return Math.max(b.maxX - b.minX, b.maxY - b.minY);
 }
 

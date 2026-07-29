@@ -8,6 +8,7 @@ import { eraserStamp, subtractStamp } from '../drawing/eraseGeometry';
 import { anchoredStroke } from './strokeFactory';
 import type { FramePoint } from '../drawing/anchorCommit';
 import type { Tool, ToolContext, ToolSettings, CanvasApi, FrameBox } from './Tool';
+import { log } from '../debug/logger';
 
 const CURSOR_COLOR = 0x999999;
 
@@ -36,24 +37,41 @@ export class EraserTool implements Tool {
   onDown(ctx: ToolContext): void {
     this.erasing = true;
     this.beginGesture(ctx);
+    log('tool', 'eraser gesture start', {
+      frame: ctx.frame, size: this.settings.size, frameRadius: this.frameRadius,
+      level: ctx.projCamera.level,
+    });
     this.eraseStep([ctx.frame]);
     this.last = { ...ctx.frame };
   }
 
   onMove(ctx: ToolContext): void {
     this.beginGesture(ctx);
-    if (!this.erasing || !this.last) return;
+    if (!this.erasing || !this.last) {
+      // `last` unset while erasing means a previous step threw before assigning it — the
+      // gesture would then silently no-op for the rest of the drag, so make it visible.
+      if (this.erasing) log('error', 'eraser onMove with no `last` — gesture wedged', ctx.frame);
+      return;
+    }
+    // Coalesce sub-radius moves into one step. Each step runs polygon-clipping against every
+    // overlapping stroke, so processing every coalesced pointer sample (dozens per frame at high
+    // report rates) is what pegged the eraser to multi-second INP. Let the segment grow until it
+    // covers meaningful distance, then subtract the whole capsule at once.
+    const minStep = Math.max(this.frameRadius * 0.5, 1e-6);
+    if (dist(this.last, ctx.frame) < minStep) return;
     this.eraseStep([this.last, ctx.frame]);
     this.last = { ...ctx.frame };
   }
 
   onUp(): void {
+    log('tool', 'eraser gesture end', { wasErasing: this.erasing });
     if (this.erasing) this.api.eraseEnd();
     this.erasing = false;
     this.last = null;
   }
 
   cancel(): void {
+    log('tool', 'eraser cancel', { wasErasing: this.erasing });
     if (this.erasing) this.api.eraseEnd();
     this.erasing = false;
     this.last = null;
@@ -78,16 +96,26 @@ export class EraserTool implements Tool {
 
   private eraseStep(path: Point[]): void {
     if (!this.camera) return;
+    const t0 = performance.now();
     const stamp = eraserStamp(path, this.frameRadius);
     const box = expand(pathBox(path), this.frameRadius);
     const removeIds: string[] = [];
     const additions: BrushStroke[] = [];
-    for (const cand of this.api.strokesInFrame(box, this.camera)) {
+    const candidates = this.api.strokesInFrame(box, this.camera);
+    for (const cand of candidates) {
       const result = subtractStamp(cand.frameRings, stamp);
       if (result === null) continue; // stamp didn't touch this stroke
       removeIds.push(cand.stroke.id);
       for (const poly of result) additions.push(this.remnant(poly, cand.stroke));
     }
+    const dt = performance.now() - t0;
+    const data = {
+      path, frameRadius: this.frameRadius, stampPolys: stamp.length,
+      candidates: candidates.length, removing: removeIds.length, adding: additions.length,
+      ms: +dt.toFixed(2),
+    };
+    if (dt >= 16) log('error', `SLOW eraseStep ${dt.toFixed(1)}ms`, data);
+    else log('tool', 'eraser step', data);
     if (removeIds.length > 0) this.api.eraseLive(removeIds, additions);
   }
 
@@ -111,6 +139,10 @@ export class EraserTool implements Tool {
 
 function toFramePoints(ring: Pair[]): FramePoint[] {
   return ring.map(([x, y]) => ({ x, y }));
+}
+
+function dist(a: Point, b: Point): number {
+  return Math.hypot(b.x - a.x, b.y - a.y);
 }
 
 function pathBox(path: Point[]): FrameBox {

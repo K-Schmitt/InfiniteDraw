@@ -78,19 +78,25 @@ function distanceToRings(p: Point, rings: Pair[][]): number {
   return min;
 }
 
-// the largest face is the exterior (the box) — skip it; return the enclosed face under the point
+// returns the enclosed face under the point; rejects faces touching the artificial box (open regions)
 function pickCell(world: Pair, faces: Pair[][][]): Pair[][] | null {
   if (faces.length === 0) return null;
-  let exterior = 0;
-  faces.forEach((face, i) => {
-    if (area(face[0]!) > area(faces[exterior]![0]!)) exterior = i;
-  });
   for (let i = 0; i < faces.length; i++) {
-    if (i === exterior) continue;
     const face = faces[i]!;
+    if (touchesBoundary(face)) continue;
     if (inside(world, face[0]!) && !inAnyHole(world, face)) return face;
   }
   return null;
+}
+
+function touchesBoundary(face: Pair[][]): boolean {
+  // polygon-clipping might generate precise exact intersections on the box edges.
+  for (const [x, y] of face[0]!) {
+    if (x <= -MARGIN + 1e-4 || x >= 1000 + MARGIN - 1e-4 || y <= -MARGIN + 1e-4 || y >= 1000 + MARGIN - 1e-4) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function inAnyHole(world: Pair, face: Pair[][]): boolean {
@@ -113,16 +119,6 @@ function inside(p: Pair, ring: Pair[]): boolean {
   const flat: number[] = [];
   for (const [x, y] of ring) flat.push(x, y);
   return pointInPolygon(p[0], p[1], flat);
-}
-
-function area(ring: Pair[]): number {
-  let sum = 0;
-  for (let i = 0; i < ring.length; i++) {
-    const [ax, ay] = ring[i]!;
-    const [bx, by] = ring[(i + 1) % ring.length]!;
-    sum += ax * by - bx * ay;
-  }
-  return Math.abs(sum) / 2;
 }
 
 function flatUnmap(ring: Pair[], frame: Parameters<typeof unmapPair>[1]): number[] {

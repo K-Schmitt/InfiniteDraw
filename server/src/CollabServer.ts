@@ -7,11 +7,15 @@ import type {
   InterServerEvents,
   SocketData,
   ConnectedUser,
+  CursorMovePayload,
+  RecolorPayload,
 } from '@shared/socket-events.js';
 import type { BrushStroke } from '@shared/stroke.js';
 import type { Project } from '@shared/project.js';
+import { toWireStroke, fromWireStroke, toWireProject, type WireStroke } from '@shared/wireStroke.js';
 import { GlobalRoom } from './room/GlobalRoom.js';
 import { StrokeJournal } from './storage/StrokeJournal.js';
+import { log } from './debug/logger.js';
 
 /**
  * Socket.io wiring for the single global room. Owns connection lifecycle, event relay,
@@ -34,7 +38,7 @@ export class CollabServer {
       ServerToClientEvents,
       InterServerEvents,
       SocketData
-    >(httpServer, { cors: { origin: '*' } });
+    >(httpServer, { cors: { origin: process.env['CLIENT_ORIGIN'] ?? 'http://localhost:5173' } });
 
     this.io.on('connection', (socket) => this.onConnection(socket));
   }
@@ -44,21 +48,45 @@ export class CollabServer {
   private onConnection(
     socket: Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
   ): void {
+    log('conn', 'socket connected', {
+      socketId: socket.id,
+      address: socket.handshake.address,
+      transport: socket.conn.transport.name,
+      totalSockets: this.io.engine.clientsCount,
+    });
+
     socket.on('room:create', (cb) => { void this.handleCreate(socket, cb); });
     socket.on('room:join', (roomId, cb) => { void this.handleJoin(socket, roomId, cb); });
 
     socket.on('stroke:begin', (p) => {
+      log('net', 'IN stroke:begin', {
+        socketId: socket.id, userId: socket.data.userId,
+        tentativeId: p.tentativeId, color: p.color, size: p.size, camera: p.camera,
+      });
       this.relay(socket, 'stroke:begin', { ...p, userId: socket.data.userId! });
     });
     socket.on('stroke:point', (p) => {
+      log('net', 'IN stroke:point', {
+        socketId: socket.id, tentativeId: p.tentativeId, point: p.point,
+      });
       this.relay(socket, 'stroke:point', { ...p, userId: socket.data.userId! });
     });
     socket.on('stroke:commit', (s) => { void this.handleCommit(socket, s); });
-    socket.on('stroke:preview', (p) => this.relay(socket, 'stroke:preview', p));
+    socket.on('stroke:preview', (p) => {
+      log('net', 'IN stroke:preview', { socketId: socket.id, id: p.id, points: p.points.length });
+      this.relay(socket, 'stroke:preview', p);
+    });
     socket.on('stroke:delete', (id) => { void this.handleDelete(socket, id); });
+    socket.on('stroke:recolor', (p) => { void this.handleRecolor(socket, p); });
     socket.on('cursor:move', (pos) => this.handleCursor(socket, pos));
 
-    socket.on('disconnect', () => this.handleDisconnect(socket));
+    socket.on('disconnect', (reason) => {
+      log('conn', 'socket disconnected', { socketId: socket.id, userId: socket.data.userId, reason });
+      this.handleDisconnect(socket);
+    });
+    socket.on('error', (err: Error) => {
+      log('error', 'socket error', { socketId: socket.id, message: err.message, stack: err.stack });
+    });
   }
 
   private async handleCreate(
@@ -72,7 +100,11 @@ export class CollabServer {
     socket.data.roomId = 'global';
     await socket.join('global');
     room.addUser(user);
-    socket.emit('project:state', emptyProject(room.snapshot()));
+    const strokes = room.snapshot();
+    log('conn', 'room:create', {
+      socketId: socket.id, user, strokesSent: strokes.length, usersInRoom: room.users().length,
+    });
+    socket.emit('project:state', toWireProject(emptyProject(strokes)));
     socket.to('global').emit('user:joined', user);
     callback('global');
   }
@@ -89,7 +121,12 @@ export class CollabServer {
     socket.data.roomId = 'global';
     await socket.join('global');
     room.addUser(user);
-    socket.emit('project:state', emptyProject(room.snapshot()));
+    const strokes = room.snapshot();
+    log('conn', 'room:join', {
+      socketId: socket.id, requested: _roomId, user,
+      strokesSent: strokes.length, usersInRoom: room.users().length,
+    });
+    socket.emit('project:state', toWireProject(emptyProject(strokes)));
     socket.to('global').emit('user:joined', user);
     callback();
   }
@@ -99,6 +136,9 @@ export class CollabServer {
   ): void {
     if (!this.room || !socket.data.userId) return;
     this.room.removeUser(socket.data.userId);
+    log('room', 'user removed', {
+      userId: socket.data.userId, remaining: this.room.users().length,
+    });
     this.io.to('global').emit('user:left', socket.data.userId);
   }
 
@@ -115,34 +155,78 @@ export class CollabServer {
 
   private async handleCommit(
     socket: Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
-    stroke: BrushStroke,
+    wire: WireStroke,
   ): Promise<void> {
     if (!this.room || !socket.data.roomId) return;
+    const stroke = fromWireStroke(wire);
+    const err = validateStroke(stroke);
+    if (err) {
+      log('error', 'stroke:commit REJECTED', { socketId: socket.id, id: wire.id, reason: err });
+      socket.emit('error', err);
+      return;
+    }
+    stroke.ownerId = socket.data.userId;
     stroke.zIndex = this.nextZ++;
     await this.room.addStroke(stroke);
-    socket.to(socket.data.roomId).emit('stroke:added', stroke);
+    log('net', 'IN stroke:commit -> OUT stroke:added', {
+      socketId: socket.id, userId: socket.data.userId, id: stroke.id,
+      type: stroke.type, color: stroke.color, size: stroke.size,
+      points: stroke.points.length, holes: stroke.holes?.length ?? 0, filled: !!stroke.filled,
+      anchorLevel: stroke.anchor.level, zIndex: stroke.zIndex,
+      roomStrokes: this.room.size(),
+    });
+    this.io.to(socket.data.roomId).emit('stroke:added', toWireStroke(stroke));
   }
 
   private async handleDelete(
     socket: Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
     strokeId: string,
   ): Promise<void> {
+    // No ownership check: the room is a shared canvas and the vector eraser works by
+    // replace (delete the touched stroke, commit its remnants). Refusing another user's
+    // delete leaves the original in place while remnants keep accumulating every
+    // pointermove — unbounded stroke growth that stalls every client.
     if (!this.room || !socket.data.roomId) return;
+    const existed = this.room.has(strokeId);
     await this.room.deleteStroke(strokeId);
+    log('net', 'IN stroke:delete -> OUT stroke:deleted', {
+      socketId: socket.id, userId: socket.data.userId, id: strokeId,
+      existed, roomStrokes: this.room.size(),
+    });
     socket.to(socket.data.roomId).emit('stroke:deleted', strokeId);
+  }
+
+  private async handleRecolor(
+    socket: Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
+    payload: RecolorPayload,
+  ): Promise<void> {
+    if (!this.room || !socket.data.roomId) return;
+    if (!Array.isArray(payload.ids) || payload.ids.length === 0) return;
+    const applied = await this.room.recolorStrokes(payload.ids, payload.color);
+    if (applied.length === 0) return;
+    log('net', 'IN stroke:recolor -> OUT stroke:recolored', {
+      socketId: socket.id, userId: socket.data.userId,
+      requested: payload.ids.length, applied: applied.length, color: payload.color,
+    });
+    socket.to(socket.data.roomId).emit('stroke:recolored', { ids: applied, color: payload.color });
   }
 
   // ---- cursor ---------------------------------------------------------------
 
   private handleCursor(
     socket: Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
-    position: { x: number; y: number },
+    position: CursorMovePayload,
   ): void {
     if (!socket.data.roomId || !socket.data.userId) return;
+    log('net', 'IN cursor:move', {
+      socketId: socket.id, userId: socket.data.userId,
+      x: position.x, y: position.y, level: position.camera.level,
+    });
     socket.to(socket.data.roomId).emit('cursor:moved', {
       userId: socket.data.userId,
       x: position.x,
       y: position.y,
+      camera: position.camera,
     });
   }
 
@@ -156,6 +240,9 @@ export class CollabServer {
       for (const s of this.room.snapshot()) {
         if (s.zIndex >= this.nextZ) this.nextZ = s.zIndex + 1;
       }
+      log('room', 'room created from journal', {
+        journalPath: this.journalPath, strokesLoaded: this.room.size(), nextZ: this.nextZ,
+      });
     }
     return this.room;
   }
@@ -170,10 +257,13 @@ export class CollabServer {
       { r: 251, g: 146, b: 60, a: 255 },
       { r: 168, g: 85, b: 247, a: 255 },
     ];
+    // `%` binds tighter than `??`, so the old form indexed by the raw user count and handed
+    // out `undefined` past the 5th user — every client then crashed reading `.r` off it.
+    const index = (this.room?.users().length ?? 0) % colors.length;
     return {
       id: randomUUID(),
       name: `User-${socket.id.slice(0, 5)}`,
-      color: colors[this.room?.users().length ?? 0 % colors.length]!,
+      color: colors[index]!,
     };
   }
 }
@@ -186,4 +276,16 @@ function emptyProject(strokes: readonly BrushStroke[]): Project {
     strokes: [...strokes],
     bookmarks: [],
   };
+}
+
+const MAX_ID_LENGTH = 256;
+
+function validateStroke(stroke: BrushStroke): string | null {
+  if (!stroke.id || stroke.id.length > MAX_ID_LENGTH) return 'invalid stroke id';
+  if (!stroke.layerId || stroke.layerId.length > MAX_ID_LENGTH) return 'invalid layerId';
+  if (!stroke.points || stroke.points.length === 0) return 'stroke has no points';
+  if (stroke.points.length !== stroke.pressures.length) {
+    return 'points/pressures length mismatch';
+  }
+  return null;
 }

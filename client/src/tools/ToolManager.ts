@@ -8,6 +8,7 @@ import { ShapeTool } from './ShapeTool';
 import { EraserTool } from './EraserTool';
 import { FillTool } from './FillTool';
 import { EyedropperTool } from './EyedropperTool';
+import { log } from '../debug/logger';
 
 export type ToolId = 'brush' | 'line' | 'shape' | 'eraser' | 'fill' | 'eyedropper';
 
@@ -39,6 +40,7 @@ export class ToolManager {
 
   setActive(id: ToolId): void {
     if (id === this.current) return;
+    log('tool', 'TOOL SWITCH', { from: this.current, to: id });
     this.active.cancel();
     this.current = id;
   }

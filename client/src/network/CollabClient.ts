@@ -5,8 +5,14 @@ import type {
   ClientToServerEvents,
   StrokeBeginPayload,
   StrokePointPayload,
+  SerializableCamera,
 } from '@shared/socket-events';
-import type { BrushStroke } from '@shared/stroke';
+import type { BrushStroke, Color } from '@shared/stroke';
+import type { CellAnchor } from '@shared/anchor';
+import { toWireStroke, fromWireStroke, fromWireProject } from '@shared/wireStroke';
+import { log, logThrottled, SESSION_ID } from '../debug/logger';
+import type { HierCamera } from '../app/HierCamera';
+import { projectToFrame, CULLED } from '../coords/viewProject';
 
 /** PixiApp implements this so CollabClient can modify state + renderer. */
 export interface CollabDelegate {
@@ -16,72 +22,158 @@ export interface CollabDelegate {
   remoteStrokeAdded(stroke: BrushStroke): void;
   /** Remote user deleted a stroke by id. */
   remoteStrokeDeleted(id: string): void;
+  /** Remote user recolored a set of strokes (paint-bucket on existing shapes). */
+  remoteStrokesRecolored(ids: readonly string[], color: Color): void;
 }
 
 type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
+/** A live remote stroke, pinned to the sender's camera cell at `stroke:begin` (frozen, like the
+ *  local brush gesture) so it can be reprojected into the receiver's own camera every frame. */
+interface LiveStroke {
+  anchor: CellAnchor;
+  color: Color;
+  size: number;
+  localPoints: { x: number; y: number }[];
+  gfx: Graphics;
+}
+
+/** A remote user's cursor, anchored the same way as a live stroke. */
+interface Ghost {
+  gfx: Graphics;
+  anchor: CellAnchor | null;
+  local: { x: number; y: number } | null;
+}
+
+/** A cell anchor plus the sub-cell offset needed to turn frame-local points into anchor-local ones. */
+interface OriginAnchor {
+  anchor: CellAnchor;
+  subX: number;
+  subY: number;
+}
+
 const CURSOR_THROTTLE_MS = 200;
 const GHOST_RADIUS = 5;
-const PREVIEW_WIDTH = 2;
 
 /**
  * Socket.io client for the single global room. Manages connection, snapshot load,
  * live stroke relay, ghost cursors, and remote previews. PixiApp owns one instance.
+ * Live previews and ghost cursors are stored anchor-relative (frozen at the sender's camera
+ * position when the gesture/cursor-move happened) and reprojected into the receiver's own
+ * camera every frame via `refresh`, exactly like committed strokes.
  */
 export class CollabClient {
   readonly remoteLayer = new Container();
   private readonly socket: TypedSocket;
   private readonly delegate: CollabDelegate;
-  private readonly ghosts = new Map<string, Graphics>();
-  private readonly previews = new Map<string, Graphics>();
-  private readonly activeStrokes = new Map<string, StrokeBeginPayload>();
+  private readonly ghosts = new Map<string, Ghost>();
+  private readonly liveStrokes = new Map<string, LiveStroke>();
+  private readonly beginOrigins = new Map<string, OriginAnchor>();
+  // Socket callbacks can land inside a render pass; freeing GPU buffers there corrupts the
+  // active batch. Retired graphics are destroyed from `refresh`, i.e. between frames.
+  private readonly pendingDestroy: Graphics[] = [];
   private lastCursorEmit = 0;
 
   constructor(serverUrl: string, delegate: CollabDelegate) {
     this.delegate = delegate;
+    log('net', 'connecting', { serverUrl, session: SESSION_ID });
     this.socket = io(serverUrl) as TypedSocket;
-    this.socket.on('connect', () => this.onConnect());
-    this.socket.on('project:state', (project) => this.delegate.loadSnapshot(project.strokes));
-    this.socket.on('stroke:added', (stroke) => this.delegate.remoteStrokeAdded(stroke));
-    this.socket.on('stroke:deleted', (id) => this.delegate.remoteStrokeDeleted(id));
+    this.socket.on('connect', () => {
+      log('net', 'CONNECTED', { socketId: this.socket.id, session: SESSION_ID });
+      this.onConnect();
+    });
+    this.socket.on('disconnect', (reason) => log('net', 'DISCONNECTED', { reason }));
+    this.socket.on('connect_error', (err) => log('error', 'connect_error', { message: err.message }));
+    this.socket.on('project:state', (project) => {
+      log('net', 'IN project:state', {
+        strokes: project.strokes.length, meta: project.meta.name,
+      });
+      this.delegate.loadSnapshot(fromWireProject(project).strokes);
+    });
+    this.socket.on('stroke:added', (stroke) => {
+      log('net', 'IN stroke:added', {
+        id: stroke.id, zIndex: stroke.zIndex, ownerId: stroke.ownerId,
+        points: stroke.points.length, color: stroke.color, anchorLevel: stroke.anchor.level,
+        isOwnEcho: this.liveStrokes.has(stroke.id) || undefined,
+      });
+      this.onStrokeAdded(fromWireStroke(stroke));
+    });
+    this.socket.on('stroke:deleted', (id) => {
+      log('net', 'IN stroke:deleted', { id });
+      this.delegate.remoteStrokeDeleted(id);
+    });
+    this.socket.on('stroke:recolored', (p) => {
+      log('net', 'IN stroke:recolored', { ids: p.ids.length, color: p.color });
+      this.delegate.remoteStrokesRecolored(p.ids, p.color);
+    });
     this.socket.on('stroke:begin', (p) => this.onRemoteBegin(p));
     this.socket.on('stroke:point', (p) => this.onRemotePoint(p));
-    this.socket.on('user:joined', (_user) => {});
-    this.socket.on('user:left', (userId) => this.removeGhost(userId));
-    this.socket.on('cursor:moved', (c) => this.moveGhost(c.userId, c.x, c.y));
-    this.socket.on('error', (msg) => console.warn('[Collab] server error:', msg));
+    this.socket.on('user:joined', (user) => log('net', 'IN user:joined', { user }));
+    this.socket.on('user:left', (userId) => {
+      log('net', 'IN user:left', { userId });
+      this.removeGhost(userId);
+    });
+    this.socket.on('cursor:moved', (c) => this.moveGhost(c.userId, c.x, c.y, c.camera));
+    this.socket.on('error', (msg) => log('error', 'server error', { message: msg }));
   }
 
   // ---- outgoing --------------------------------------------------------------
 
   sendStrokeBegin(payload: StrokeBeginPayload): void {
+    log('net', 'OUT stroke:begin', {
+      tentativeId: payload.tentativeId, color: payload.color, size: payload.size,
+      camera: payload.camera, connected: this.socket.connected,
+    });
     this.socket.emit('stroke:begin', payload);
   }
 
   sendStrokePoint(payload: StrokePointPayload): void {
+    logThrottled('out:point', 100, () => ({
+      cat: 'net', msg: 'OUT stroke:point',
+      data: { tentativeId: payload.tentativeId, point: payload.point },
+    }));
     this.socket.emit('stroke:point', payload);
   }
 
   sendStrokeCommit(stroke: BrushStroke): void {
-    this.socket.emit('stroke:commit', stroke);
+    log('net', 'OUT stroke:commit', {
+      id: stroke.id, type: stroke.type, points: stroke.points.length,
+      color: stroke.color, size: stroke.size, filled: !!stroke.filled,
+      anchorLevel: stroke.anchor.level, connected: this.socket.connected,
+    });
+    this.socket.emit('stroke:commit', toWireStroke(stroke));
   }
 
   sendStrokeDelete(id: string): void {
+    log('net', 'OUT stroke:delete', { id, connected: this.socket.connected });
     this.socket.emit('stroke:delete', id);
   }
 
-  broadcastCursor(x: number, y: number): void {
+  sendStrokeRecolor(ids: readonly string[], color: Color): void {
+    log('net', 'OUT stroke:recolor', { ids: ids.length, color, connected: this.socket.connected });
+    this.socket.emit('stroke:recolor', { ids: [...ids], color });
+  }
+
+  broadcastCursor(x: number, y: number, camera: SerializableCamera): void {
     const now = performance.now();
     if (now - this.lastCursorEmit < CURSOR_THROTTLE_MS) return;
     this.lastCursorEmit = now;
-    this.socket.emit('cursor:move', { x, y });
+    this.socket.emit('cursor:move', { x, y, camera });
   }
 
   disconnect(): void {
     this.socket.disconnect();
     this.remoteLayer.destroy({ children: true });
     this.ghosts.clear();
-    this.previews.clear();
+    this.liveStrokes.clear();
+  }
+
+  /** Reproject every live preview + ghost cursor into the current camera. Call once per frame. */
+  refresh(camera: HierCamera): void {
+    for (const gfx of this.pendingDestroy) gfx.destroy();
+    this.pendingDestroy.length = 0;
+    for (const stroke of this.liveStrokes.values()) this.redrawStroke(stroke, camera);
+    for (const ghost of this.ghosts.values()) this.repositionGhost(ghost, camera);
   }
 
   // ---- incoming handlers -----------------------------------------------------
@@ -92,51 +184,140 @@ export class CollabClient {
     });
   }
 
+  private onStrokeAdded(stroke: BrushStroke): void {
+    this.removeLiveStroke(stroke.id);
+    this.delegate.remoteStrokeAdded(stroke);
+  }
+
   private onRemoteBegin(payload: StrokeBeginPayload): void {
+    log('net', 'IN stroke:begin', {
+      userId: payload.userId, tentativeId: payload.tentativeId,
+      color: payload.color, size: payload.size, camera: payload.camera,
+      liveStrokes: this.liveStrokes.size,
+    });
     if (!payload.userId) return;
-    this.activeStrokes.set(payload.tentativeId, payload);
+    this.removeLiveStroke(payload.tentativeId);
     const gfx = new Graphics();
-    gfx.setStrokeStyle({ color: rgba(payload.color), width: 1 });
-    gfx.circle(0, 0, payload.size / 2).stroke();
-    this.previews.set(payload.tentativeId, gfx);
     this.remoteLayer.addChild(gfx);
+    const origin = anchorOf(payload.camera);
+    this.liveStrokes.set(payload.tentativeId, {
+      anchor: origin.anchor,
+      color: payload.color,
+      size: payload.size,
+      localPoints: [],
+      gfx,
+    });
+    this.beginOrigins.set(payload.tentativeId, origin);
     this.ensureGhost(payload.userId, payload.color);
   }
 
   private onRemotePoint(payload: StrokePointPayload): void {
-    if (!payload.userId) return;
-    const gfx = this.previews.get(payload.tentativeId);
-    if (!gfx) return;
-    const { x, y } = payload.point;
-    gfx.circle(x, y, PREVIEW_WIDTH / 2).fill({ color: gfx.strokeStyle.color });
-    this.moveGhost(payload.userId, x, y);
+    const stroke = this.liveStrokes.get(payload.tentativeId);
+    const origin = this.beginOrigins.get(payload.tentativeId);
+    if (!stroke || !origin) {
+      log('net', 'IN stroke:point ORPHAN (no matching begin)', {
+        tentativeId: payload.tentativeId, known: [...this.liveStrokes.keys()],
+      });
+      return;
+    }
+    logThrottled('in:point', 100, () => ({
+      cat: 'net', msg: 'IN stroke:point',
+      data: {
+        tentativeId: payload.tentativeId, point: payload.point,
+        bufferedPoints: stroke.localPoints.length,
+      },
+    }));
+    stroke.localPoints.push({
+      x: origin.subX + payload.point.x,
+      y: origin.subY + payload.point.y,
+    });
+  }
+
+  private removeLiveStroke(tentativeId: string): void {
+    const stroke = this.liveStrokes.get(tentativeId);
+    if (!stroke) return;
+    this.remoteLayer.removeChild(stroke.gfx);
+    this.pendingDestroy.push(stroke.gfx);
+    this.liveStrokes.delete(tentativeId);
+    this.beginOrigins.delete(tentativeId);
+  }
+
+  private redrawStroke(stroke: LiveStroke, camera: HierCamera): void {
+    const screenPoints: { x: number; y: number }[] = [];
+    for (const p of stroke.localPoints) {
+      const proj = projectToFrame(stroke.anchor, p.x, p.y, camera.projCamera);
+      if (proj === CULLED) continue;
+      screenPoints.push(camera.frameToScreen(proj.fx, proj.fy));
+    }
+    stroke.gfx.clear();
+    if (screenPoints.length === 0) {
+      stroke.gfx.visible = false;
+      return;
+    }
+    stroke.gfx.visible = true;
+    stroke.gfx.moveTo(screenPoints[0]!.x, screenPoints[0]!.y);
+    for (const p of screenPoints.slice(1)) stroke.gfx.lineTo(p.x, p.y);
+    stroke.gfx.stroke({
+      color: rgba(stroke.color),
+      alpha: stroke.color.a / 255,
+      width: Math.max(1, stroke.size),
+      cap: 'round',
+      join: 'round',
+    });
   }
 
   // ---- ghost cursors ---------------------------------------------------------
 
-  private ensureGhost(id: string, color: { r: number; g: number; b: number; a: number }): void {
+  private ensureGhost(id: string, color: Color): void {
     if (this.ghosts.has(id)) return;
     const gfx = new Graphics();
     gfx.circle(0, 0, GHOST_RADIUS).fill({ color: rgba(color), alpha: 0.8 });
-    this.ghosts.set(id, gfx);
+    gfx.visible = false;
     this.remoteLayer.addChild(gfx);
+    this.ghosts.set(id, { gfx, anchor: null, local: null });
   }
 
-  private moveGhost(userId: string, x: number, y: number): void {
-    const gfx = this.ghosts.get(userId);
-    if (gfx) gfx.position.set(x, y);
+  private moveGhost(userId: string, x: number, y: number, camera: SerializableCamera): void {
+    if (!this.ghosts.has(userId)) this.ensureGhost(userId, DEFAULT_GHOST_COLOR);
+    const ghost = this.ghosts.get(userId)!;
+    const origin = anchorOf(camera);
+    ghost.anchor = origin.anchor;
+    ghost.local = { x: origin.subX + x, y: origin.subY + y };
+  }
+
+  private repositionGhost(ghost: Ghost, camera: HierCamera): void {
+    if (!ghost.anchor || !ghost.local) return;
+    const proj = projectToFrame(ghost.anchor, ghost.local.x, ghost.local.y, camera.projCamera);
+    if (proj === CULLED) {
+      ghost.gfx.visible = false;
+      return;
+    }
+    ghost.gfx.visible = true;
+    const screen = camera.frameToScreen(proj.fx, proj.fy);
+    ghost.gfx.position.set(screen.x, screen.y);
   }
 
   private removeGhost(userId: string): void {
-    const gfx = this.ghosts.get(userId);
-    if (gfx) {
-      this.remoteLayer.removeChild(gfx);
-      gfx.destroy();
+    const ghost = this.ghosts.get(userId);
+    if (ghost) {
+      this.remoteLayer.removeChild(ghost.gfx);
+      this.pendingDestroy.push(ghost.gfx);
       this.ghosts.delete(userId);
     }
   }
 }
 
-function rgba(c: { r: number; g: number; b: number; a: number }): number {
+const DEFAULT_GHOST_COLOR: Color = { r: 128, g: 128, b: 128, a: 255 };
+
+/** A frozen camera cell/level plus the sub-cell offset needed to anchor frame-local points. */
+function anchorOf(camera: SerializableCamera): OriginAnchor {
+  return {
+    anchor: { level: camera.level, cell: { x: BigInt(camera.cellX), y: BigInt(camera.cellY) } },
+    subX: camera.subX,
+    subY: camera.subY,
+  };
+}
+
+function rgba(c: Color): number {
   return (c.r << 16) | (c.g << 8) | c.b;
 }

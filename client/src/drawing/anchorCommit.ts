@@ -23,7 +23,12 @@ export function commitAnchor(
   return { anchor, localPoints, cellBbox: cellBboxOfLocal(anchor, localPoints) };
 }
 
-/** Finest level (≤ camera.level) whose single cell contains the whole gesture bbox. */
+/**
+ * Finest level (≤ camera.level) whose single cell contains the whole gesture bbox — or, when the
+ * bbox straddles the origin (no single cell can hold it, since every quadtree boundary aligns at
+ * 0), the coarsest cell the search reaches. Downstream (`cellBboxOfLocal`) already tolerates
+ * anchor-local points outside one cell, so the min corner is a valid reference either way.
+ */
 export function anchorForPoints(pts: readonly FramePoint[], camera: ProjCamera): CellAnchor {
   const { minFx, minFy, maxFx, maxFy } = frameBbox(pts);
   const lo = frameToAnchor(minFx, minFy, camera).anchor.cell;
@@ -33,8 +38,13 @@ export function anchorForPoints(pts: readonly FramePoint[], camera: ProjCamera):
   let minY = lo.y;
   let maxX = hi.x;
   let maxY = hi.y;
+  // Arithmetic `>>` on cells of opposite sign (min < 0 ≤ max) never equalises: -1n >> 1n === -1n
+  // stays put while 0n >> 1n === 0n. Stop when a shift makes no progress to avoid spinning the
+  // main thread forever (froze the tab with no error when a stroke crossed the origin).
   while (minX !== maxX || minY !== maxY) {
-    minX >>= 1n; maxX >>= 1n; minY >>= 1n; maxY >>= 1n; // arithmetic floor shift, cell-aligned
+    const nMinX = minX >> 1n, nMaxX = maxX >> 1n, nMinY = minY >> 1n, nMaxY = maxY >> 1n;
+    if (nMinX === minX && nMaxX === maxX && nMinY === minY && nMaxY === maxY) break;
+    minX = nMinX; maxX = nMaxX; minY = nMinY; maxY = nMaxY;
     level -= 1;
   }
   return { level, cell: { x: minX, y: minY } };

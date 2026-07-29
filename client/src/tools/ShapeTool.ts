@@ -7,6 +7,7 @@ import { buildStroke, anchoredStroke } from './strokeFactory';
 import { drawStrokePreview } from './strokePreview';
 import { shapePoints, type ShapeKind } from './shapeGeometry';
 import type { Tool, ToolContext, ToolSettings, CanvasApi } from './Tool';
+import { log } from '../debug/logger';
 
 /** Rectangle / ellipse / triangle dragged from one corner to the opposite. Outlined (use Fill to fill). */
 export class ShapeTool implements Tool {
@@ -31,6 +32,10 @@ export class ShapeTool implements Tool {
     this.cameraScale = ctx.cameraScale;
     this.color = { ...this.settings.primary };
     this.kind = this.settings.shape;
+    log('tool', 'shape begin', {
+      kind: this.kind, start: this.start, color: this.color,
+      size: this.settings.size, level: ctx.projCamera.level,
+    });
   }
 
   onMove(ctx: ToolContext): void {
@@ -56,13 +61,26 @@ export class ShapeTool implements Tool {
   }
 
   private commit(): void {
-    if (!this.start || !this.current || !this.camera) return;
-    if (this.start.x === this.current.x && this.start.y === this.current.y) return;
+    if (!this.start || !this.current || !this.camera) {
+      log('tool', 'shape commit SKIPPED (no gesture)', { hasStart: !!this.start });
+      return;
+    }
+    if (this.start.x === this.current.x && this.start.y === this.current.y) {
+      log('tool', 'shape commit SKIPPED (zero size)', { at: this.start });
+      return;
+    }
+    const points = shapePoints(this.kind, this.start, this.current);
+    log('tool', 'shape commit', {
+      kind: this.kind, start: this.start, end: this.current,
+      width: +Math.abs(this.current.x - this.start.x).toFixed(3),
+      height: +Math.abs(this.current.y - this.start.y).toFixed(3),
+      vertices: points.length, color: this.color, size: this.settings.size,
+    });
     this.api.add(anchoredStroke({
       type: strokeTypeFor(this.kind),
       color: this.color,
       screenSize: this.settings.size,
-      framePoints: shapePoints(this.kind, this.start, this.current),
+      framePoints: points,
       layerId: this.settings.layerId,
       camera: this.camera,
       cameraScale: this.cameraScale,

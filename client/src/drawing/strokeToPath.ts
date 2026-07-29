@@ -52,6 +52,22 @@ function denormalizeOutline(outline: readonly number[], origin: Point, scale: nu
   return out;
 }
 
+/**
+ * Rings for the *in-progress* stroke, rebuilt every frame while the pointer is down.
+ *
+ * Deliberately skips the `polygonClipping.union` that `strokeToRings` performs: that union
+ * exists to resolve a self-intersecting freehand outline into clean non-overlapping rings, and
+ * it costs 20-60ms and climbing on a real scribble — per frame, on the drawing client only,
+ * which is exactly what froze that window while the receiving one stayed smooth. The raw
+ * outline rasterizes identically for a solid fill (overlaps are invisible in one opaque
+ * colour), so the union is deferred to commit time where it runs once.
+ */
+export function strokeToPreviewRings(stroke: BrushStroke): number[][] {
+  if (stroke.filled || stroke.type !== StrokeType.BRUSH) return strokeToRings(stroke);
+  const outline = strokeToOutline(stroke);
+  return outline.length >= 6 ? [outline] : [];
+}
+
 // filled → raw polygon; brush → organic perfect-freehand outline; line/shapes → exact geometric stroker
 export function strokeToRings(stroke: BrushStroke): number[][] {
   if (stroke.filled) return filledPolygonRings(stroke);

@@ -8,9 +8,9 @@
  *   io() as Socket<ServerToClientEvents, ClientToServerEvents>
  */
 
-import type { BrushStroke, StrokePreview, Point, Color } from './stroke.js';
+import type { StrokePreview, Point, Color } from './stroke.js';
 import type { Layer } from './layer.js';
-import type { Project } from './project.js';
+import type { WireStroke, WireProject } from './wireStroke.js';
 
 /** A user connected to a drawing room. */
 export interface ConnectedUser {
@@ -22,9 +22,23 @@ export interface ConnectedUser {
 
 export interface CursorPosition {
   userId: string;
-  /** World-space position. */
+  /** Sender's camera-frame-local position; receivers reproject via `camera`. */
   x: number;
   y: number;
+  camera: SerializableCamera;
+}
+
+/** Paint-bucket recolor of one or more existing strokes to a single color. */
+export interface RecolorPayload {
+  ids: string[];
+  color: Color;
+}
+
+/** Sent on cursor move — frame-local position plus the camera it's relative to. */
+export interface CursorMovePayload {
+  x: number;
+  y: number;
+  camera: SerializableCamera;
 }
 
 /**
@@ -63,10 +77,10 @@ export interface StrokePointPayload {
 
 export interface ServerToClientEvents {
   /** Full project state sent when a user first joins a room. */
-  'project:state': (project: Project) => void;
+  'project:state': (project: WireProject) => void;
 
   /** Another user committed a completed stroke. */
-  'stroke:added': (stroke: BrushStroke) => void;
+  'stroke:added': (stroke: WireStroke) => void;
 
   /** Live preview of a stroke in progress (partial points). */
   'stroke:preview': (preview: StrokePreview) => void;
@@ -79,6 +93,9 @@ export interface ServerToClientEvents {
 
   /** Another user deleted a stroke by id. */
   'stroke:deleted': (strokeId: string) => void;
+
+  /** Another user recolored a set of strokes (paint-bucket on existing shapes). */
+  'stroke:recolored': (payload: RecolorPayload) => void;
 
   /** Layer list changed (add, remove, reorder, rename). */
   'layer:updated': (layers: Layer[]) => void;
@@ -114,7 +131,7 @@ export interface ClientToServerEvents {
   'stroke:point': (payload: StrokePointPayload) => void;
 
   /** Commit a completed stroke to the room. */
-  'stroke:commit': (stroke: BrushStroke) => void;
+  'stroke:commit': (stroke: WireStroke) => void;
 
   /** Broadcast a live preview while drawing (throttled, ~60Hz). */
   'stroke:preview': (preview: StrokePreview) => void;
@@ -122,8 +139,11 @@ export interface ClientToServerEvents {
   /** Delete a stroke by id. */
   'stroke:delete': (strokeId: string) => void;
 
-  /** Broadcast cursor world-space position (throttled, ~30Hz). */
-  'cursor:move': (position: Point) => void;
+  /** Recolor a set of strokes to one color (paint-bucket on existing shapes). */
+  'stroke:recolor': (payload: RecolorPayload) => void;
+
+  /** Broadcast cursor position, frame-local to the sender's camera (throttled, ~30Hz). */
+  'cursor:move': (position: CursorMovePayload) => void;
 }
 
 // ---------------------------------------------------------------------------
