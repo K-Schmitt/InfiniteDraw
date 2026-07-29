@@ -54,6 +54,7 @@ client/.vite/
 
 # Agent / assistant context (local only)
 docs/
+!docs/deployment.md
 AGENTS.md
 CLAUDE.md
 NOTES.md
