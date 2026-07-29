@@ -10,10 +10,17 @@ Format: `- [ ] [Phase/Task] Description — comment verifier`
 
 - [ ] [Task 2] Verifier end-to-end apres build: `curl localhost:3000/` (200),
       `curl localhost:3000/some/spa` (200 SPA fallback), `/health` (200 ok)
-- [ ] [Task 3] Build + run l'image Docker localement, verifier `/health`,
-      verifier l'upgrade WebSocket via curl polling handshake, dessiner un
-      trait dans le navigateur et confirmer la connexion `websocket` (pas
-      bloquee sur `polling`) dans DevTools -> Network -> WS
+- [ ] [Task 3, Step 5] Build l'image (`docker build -t infinityboard:local .`),
+      la lancer (`docker run --rm -p 3000:3000 -e NODE_ENV=production
+      infinityboard:local`), verifier `curl localhost:3000/health` ->
+      `{"status":"ok"}` et `curl -o /dev/null -w "%{http_code}" localhost:3000/`
+      -> `200`
+- [ ] [Task 3, Step 6] Verifier l'upgrade WebSocket dans le conteneur :
+      `curl -i "http://localhost:3000/socket.io/?EIO=4&transport=polling"` doit
+      renvoyer `HTTP/1.1 200 OK` et un corps commencant par `0{"sid":`; puis
+      ouvrir `http://localhost:3000` dans un navigateur, dessiner un trait, et
+      confirmer dans DevTools -> Network -> WS qu'une connexion `websocket`
+      s'ouvre (pas bloquee sur `polling`)
 - [ ] [Task 4] Deploiement Coolify reel: creer l'app, variables d'env, volume
       persistant `/app/data`, verifier l'upgrade WS a travers le proxy Traefik,
       tester la collab a deux fenetres navigateur sur le domaine live

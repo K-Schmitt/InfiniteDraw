@@ -38,6 +38,7 @@ client/coverage/
 *.lorien
 saves/
 server/data/*.bin
+data/
 
 # Debug traces
 server/logs/

@@ -32,7 +32,7 @@ httpServer.on('error', (err: NodeJS.ErrnoException) => {
   throw err;
 });
 
-new CollabServer(httpServer);
+new CollabServer(httpServer, process.env['JOURNAL_PATH'] ?? 'data/journal.bin');
 
 httpServer.listen(PORT, () => {
   console.log(`InfiniteDraw server listening on :${PORT}`);
