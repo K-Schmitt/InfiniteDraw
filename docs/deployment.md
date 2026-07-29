@@ -33,10 +33,8 @@ npm run build
 NODE_ENV=production npm start --prefix server
 ```
 
-`JOURNAL_PATH` defaults to the **cwd-relative** `data/journal.bin`. Running the
-server from the repo root instead of from `server/` therefore opens a different,
-empty journal — the room looks wiped. Always start from `server/`, or set
-`JOURNAL_PATH` to an absolute path.
+See "Journal path footgun" below — `JOURNAL_PATH` defaults to the **cwd-relative**
+`data/journal.bin`, so always start from `server/` or set it explicitly.
 
 ### Journal path footgun
 The stroke journal (`CollabServer`'s second constructor argument) resolves
