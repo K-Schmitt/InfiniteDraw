@@ -1,6 +1,8 @@
+import type { Point } from '@shared/stroke';
 import { LOCAL_SPAN_N, type CellAnchor } from '@shared/anchor';
 import { projectToFrame, CULLED, type ProjCamera } from '../coords/viewProject';
 import { ldexp } from '../coords/ldexp';
+import { pointInRings } from './hitTest';
 
 /**
  * Project a stroke's anchor-local rings into the camera frame — the exact transform the
@@ -70,31 +72,54 @@ export function frameBboxOf(rings: readonly number[][]): {
   return { minX, minY, maxX, maxY };
 }
 
-interface LocalBounds {
+export interface LocalBounds {
   minX: number; minY: number; maxX: number; maxY: number;
 }
 
+/** A stroke's baked anchor-local geometry: its rings plus their cached bbox. */
+export interface StrokeGeometry {
+  readonly bounds: LocalBounds;
+  readonly rings: readonly number[][];
+}
+
 /**
- * True when the camera sits over a much-coarser stroke's painted extent — the stroke has no
- * visible detail at this depth but must never vanish (spec §4 bleeding anchor). Tests the
- * camera's position in the anchor's local frame against the stroke's local bounds, so an empty
- * area that merely shares the stroke's coarse enclosing cell does NOT falsely bleed. Only
- * meaningful when the anchor is coarser than the camera; finer strokes can't enclose it.
+ * The camera's frame origin expressed in an anchor's local coordinates. Null when the anchor is
+ * finer than the camera — a finer stroke can never enclose the viewport, so there is nothing to
+ * test against.
  */
-export function cameraInsideStroke(
-  localBounds: LocalBounds,
-  anchor: CellAnchor,
-  camera: ProjCamera,
-): boolean {
+export function cameraLocalPoint(anchor: CellAnchor, camera: ProjCamera): Point | null {
   const gap = camera.level - anchor.level;
-  if (gap < 0) return false;
+  if (gap < 0) return null;
   const g = BigInt(gap);
   const intX = (camera.cell.x * LOCAL_SPAN_N) >> g;
   const intY = (camera.cell.y * LOCAL_SPAN_N) >> g;
-  const camX = Number(intX - anchor.cell.x * LOCAL_SPAN_N) + ldexp(camera.sub.x, -gap);
-  const camY = Number(intY - anchor.cell.y * LOCAL_SPAN_N) + ldexp(camera.sub.y, -gap);
-  return camX >= localBounds.minX && camX <= localBounds.maxX
-      && camY >= localBounds.minY && camY <= localBounds.maxY;
+  return {
+    x: Number(intX - anchor.cell.x * LOCAL_SPAN_N) + ldexp(camera.sub.x, -gap),
+    y: Number(intY - anchor.cell.y * LOCAL_SPAN_N) + ldexp(camera.sub.y, -gap),
+  };
+}
+
+/**
+ * True when the camera sits over a much-coarser stroke's *painted* area — the stroke has no
+ * visible detail at this depth but must never vanish (spec §4 bleeding anchor).
+ *
+ * The bbox alone is not the painted area: for a closed shape the outline is an annulus, so its
+ * bbox covers the hollow interior. Testing the bbox made zooming into that interior bleed the
+ * stroke's colour over the whole viewport past the deep-zoom threshold — an empty centre going
+ * solid. The bbox therefore only serves as the O(1) pre-reject; the even-odd ring test decides.
+ */
+export function cameraInsideStroke(
+  geometry: StrokeGeometry,
+  anchor: CellAnchor,
+  camera: ProjCamera,
+): boolean {
+  const cam = cameraLocalPoint(anchor, camera);
+  if (cam === null || !insideBounds(cam, geometry.bounds)) return false;
+  return pointInRings(cam.x, cam.y, geometry.rings);
+}
+
+function insideBounds(p: Point, b: LocalBounds): boolean {
+  return p.x >= b.minX && p.x <= b.maxX && p.y >= b.minY && p.y <= b.maxY;
 }
 
 /** Local (anchor-frame) bbox of a stroke's baked rings. */

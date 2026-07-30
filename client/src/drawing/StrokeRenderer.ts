@@ -444,9 +444,12 @@ export class StrokeRenderer {
     p.gfx.visible = true;
   }
 
-  // camera outside → hide; camera over a much-coarser stroke's extent → bleed a viewport fill (§4)
+  // camera outside → hide; camera over a much-coarser stroke's painted area → bleed a viewport
+  // fill (§4). "Painted area", not bounding box: the hollow centre of a closed shape must stay
+  // empty however deep you zoom into it.
   private placeCulled(item: StrokeItem, p: Placement, camera: ProjCamera): void {
-    const inside = cameraInsideStroke(item.ringBounds, item.stroke.anchor, camera);
+    const geometry = { bounds: item.ringBounds, rings: item.rings };
+    const inside = cameraInsideStroke(geometry, item.stroke.anchor, camera);
     if (!inside) { p.gfx.visible = false; return; }
     if (p.mode !== 'bleed') {
       log('render', 'mode -> bleed (camera inside coarse stroke)', {
