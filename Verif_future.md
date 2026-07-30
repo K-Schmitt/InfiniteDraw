@@ -42,6 +42,9 @@ Format: `- [ ] [Phase/Task] Description — comment verifier`
 
 - [ ] [Task 17] Repro manuelle du bug "wrong shape" (F2b, deja documente dans
       NOTES.md) a plusieurs zooms apres le rewrite deux-etapes
+- [ ] [Task 17] Smoke test du bucket : dessiner un rectangle, cliquer a
+      l'interieur, confirmer que ca remplit et que "fill fell back to traced
+      contour" n'apparait pas dans la console
 - [ ] Test de charge visuel : formes imbriquees + trous a zoom extreme
 
 ## Phase 4 — Collaboration Hardening
