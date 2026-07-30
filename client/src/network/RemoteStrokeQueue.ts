@@ -3,12 +3,20 @@ import type { BrushStroke } from '@shared/stroke';
 /** A pending remote mutation, coalesced per stroke id until the next flush. */
 type PendingOp =
   | { readonly kind: 'add'; readonly stroke: BrushStroke }
+  | { readonly kind: 'forceAdd'; readonly stroke: BrushStroke }
   | { readonly kind: 'delete' };
 
 /** Applies a coalesced op to state + renderer. Runs inside the frame's time budget. */
 export interface RemoteOpSink {
   hasStroke(id: string): boolean;
   applyAdd(stroke: BrushStroke): void;
+  /**
+   * Renders a stroke unconditionally — no isEcho/hasStroke check. Reserved for snapshot loads,
+   * where the caller has already bulk-replaced `state` before enqueueing: every incoming stroke
+   * id is guaranteed to already be "known" to state, which would make the ordinary echo check in
+   * `applyAdd` misfire as "already rendered" for 100% of a resync and skip building any Graphics.
+   */
+  applyForceAdd(stroke: BrushStroke): void;
   applyDelete(id: string): void;
 }
 
@@ -29,6 +37,11 @@ export class RemoteStrokeQueue {
 
   enqueueAdd(stroke: BrushStroke): void {
     this.pending.set(stroke.id, { kind: 'add', stroke });
+  }
+
+  /** Snapshot-load add: always renders, never treated as an echo of a local optimistic commit. */
+  enqueueForceAdd(stroke: BrushStroke): void {
+    this.pending.set(stroke.id, { kind: 'forceAdd', stroke });
   }
 
   enqueueDelete(id: string): void {
@@ -53,6 +66,7 @@ export class RemoteStrokeQueue {
     for (const [id, op] of this.pending) {
       this.pending.delete(id);
       if (op.kind === 'add') this.sink.applyAdd(op.stroke);
+      else if (op.kind === 'forceAdd') this.sink.applyForceAdd(op.stroke);
       else this.sink.applyDelete(id);
       if (performance.now() - start >= budgetMs) return;
     }

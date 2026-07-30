@@ -13,6 +13,7 @@ import { buildContextMenuItems } from '../ui/contextMenuItems';
 import type { StrokeBeginPayload } from '@shared/socket-events';
 import { CollabClient, type CollabDelegate } from '../network/CollabClient';
 import { RemoteStrokeQueue, type RemoteOpSink } from '../network/RemoteStrokeQueue';
+import { syncSnapshot } from '../network/snapshotSync';
 import type { ProjCamera } from '../coords/viewProject';
 import { decodeCamera, writePermalink } from './cameraPermalink';
 import { log, logThrottled, installDebugApi, SESSION_ID } from '../debug/logger';
@@ -114,11 +115,12 @@ export class PixiApp {
 
     const delegate: CollabDelegate = {
       loadSnapshot: (strokes) => {
-        const current = [...this.state.strokes];
-        log('state', 'loadSnapshot', { dropping: current.length, incoming: strokes.length });
-        this.state.loadSnapshot(strokes);
-        for (const s of current) this.remoteQueue.enqueueDelete(s.id);
-        for (const s of strokes) this.remoteQueue.enqueueAdd(s);
+        log('state', 'loadSnapshot', {
+          dropping: this.state.strokes.length, incoming: strokes.length,
+        });
+        // syncSnapshot owns the enqueueForceAdd-vs-enqueueAdd decision (see its doc comment) —
+        // directly covered by snapshotSync.test.ts, not just a queue-primitive-level test.
+        syncSnapshot(strokes, this.state, this.remoteQueue);
       },
       // Socket callbacks only enqueue; the actual state/renderer work is drained under a per-frame
       // time budget in tick(). A peer flooding thousands of ops can no longer block this thread.
@@ -147,6 +149,7 @@ export class PixiApp {
     return {
       hasStroke: (id) => this.state.hasStroke(id),
       applyAdd: (stroke) => this.applyRemoteAdd(stroke),
+      applyForceAdd: (stroke) => this.applyRemoteForceAdd(stroke),
       applyDelete: (id) => this.applyRemoteDelete(id),
     };
   }
@@ -166,6 +169,15 @@ export class PixiApp {
       return;
     }
     this.state.addRemoteStroke(stroke);
+    this.renderer.addStroke(stroke);
+  }
+
+  // Snapshot resync (join/reconnect): `state` was already bulk-replaced synchronously by
+  // loadSnapshot, so every queued stroke here is already "known" to state before this drains —
+  // the isEcho heuristic in applyRemoteAdd would misfire as "already rendered" for all of them.
+  // Render unconditionally; state itself was already updated, so it is not touched again here.
+  private applyRemoteForceAdd(stroke: BrushStroke): void {
+    log('state', 'snapshot stroke rendered', { id: stroke.id, total: this.state.strokes.length });
     this.renderer.addStroke(stroke);
   }
 
