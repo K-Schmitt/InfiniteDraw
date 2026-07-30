@@ -118,15 +118,45 @@ Measured, one long erase pass across five freehand strokes:
 
 The receiver-side `RemoteStrokeQueue` batching stays in place as defence in depth.
 
-### OPEN — Stroke still disappears at 10^-16 zoom-out · **cosmetic, extreme zoom**
+### KNOWN LIMITATION — residual camera drift past ~2^-60 zoom-out
 
-Still reproducible after the F2 audit fixes. Consistent with the un-eliminated residual of the
-camera BigInt fix (commit `1a62e2c`, verdict PASS PARTIEL): the ~7px residual drift combined with
-the downstream cull threshold may be enough to push the stroke out of the visible window even
-though the camera position is no longer *corrupted* per se. To verify before reopening the camera
-chantier: log the exact projected position of the stroke at that zoom and check whether it sits
-near the edge of the cull window rather than massively wrong — that confirms/refutes the
-hypothesis. Full fix = world-anchored camera redesign (large). Do NOT reopen mid-collab.
+Bounded and measured, not open-ended. `client/src/drawing/__tests__/zoomAcceptance.test.ts`
+pins six named invariants across seven zoom levels, 2^120 down to 2^-120 (≈ 10^±36 — the *tested*
+range, not the architectural limit, which is unbounded by construction):
+
+1. a committed gesture round-trips within one pixel
+2. an origin-straddling gesture still anchors and terminates
+3. the paint bucket's pure stages are invariant under `frameScale`
+4. a symmetric zoom round trip returns to level 0 within one pixel of total drift
+5. a stroke drawn at the camera level is never culled at that level
+6. pan → zoom → pan-back lands within one pixel
+
+Failing combinations: CASE 4 / level 20, CASE 4 / level 60, CASE 4 / level 120, CASE 4 / level -20,
+CASE 4 / level -60, CASE 4 / level -120. Documented failures are `it.fails`, so they flip the suite
+red again if they ever start passing.
+
+Not covered by these six: the eraser, undo/redo, a collab round trip of a deep-zoom stroke, and
+render-placement mode transitions (`baked` → `frame` → `bleed`).
+
+`RENDER_LOG_LIMIT = 600` is **not** a zoom clamp on anything tested here: it is in ln units
+(e^600 ≈ 10^260) and applies only inside `toLegacyCamera()`, whose sole consumer is
+`GridBackground`. `StrokeRenderer`, `projectToFrame` and the fill mask all see the unclamped
+camera.
+
+Root cause of the CASE 4 failures: `normaliseLevel`'s `HYSTERESIS` dead-band crosses a level
+upward only at `frac >= 1.05` but downward at `frac < -0.05`, so N unit-magnitude `zoomBy` calls in
+one direction cross one fewer level boundary than N calls in the other — a symmetric round trip
+ends one level off, with the missing crossing's pivot shift stranded in `sub` as ~200-unit drift
+(not sub-pixel). This reproduces at every nonzero tested level, not just the deep end, and is
+independent of the Q64 sub-cell erosion mechanism below. A full fix means touching
+`normaliseLevel`'s dead-band thresholds, which is locked-invariant camera code — out of scope for
+this task; carrying only the `carry()` divmod hardening was approved.
+
+Root cause of the deep zoom-out cases in general: `HierCamera`'s Q64 fixed-point sub-cell offset
+erodes one fractional bit per level crossing (`rescaleCell`'s `>>1`), so a round trip through more
+than ~64 levels genuinely underflows. That is a property of the representation, not a bug in it —
+the point is sub-pixel and invisible at that depth either way. A full fix means a world-anchored
+camera redesign, which is out of scope for v4.0.
 
 ### ACTED — F2 bug 1 (deep-zoom flicker) · **fixed** (commit `966f9c2`)
 

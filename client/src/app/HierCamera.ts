@@ -25,6 +25,13 @@ function finiteOrZero(v: number): number {
   return Number.isFinite(v) ? v : 0;
 }
 
+/** Floor division for positive divisors: quotient rounds toward -Infinity, not toward zero. */
+function floorDivBigInt(dividend: bigint, divisor: bigint): bigint {
+  const q = dividend / divisor;
+  const r = dividend % divisor;
+  return r < 0n ? q - 1n : q;
+}
+
 // Clamp only the *rendered zoom scalar* so Math.exp never overflows to Infinity downstream
 // (float32 PixiJS transforms die well before exp(700) anyway). This does NOT bound navigation:
 // level/cell keep growing without limit, honouring the locked "no zoom bound" invariant.
@@ -135,11 +142,17 @@ export class HierCamera {
     this.carry();
   }
 
+  // Normalises sub into [0, CELL_Q) via floor-division instead of repeated subtraction: the old
+  // while-loops cost one iteration per cell crossed, which is unbounded for a single large zoomBy
+  // (measured: 4.06e33 iterations for a 120-level zoom, i.e. a hang). floorDivBigInt gives the
+  // same quotient/remainder in O(1) regardless of magnitude or sign.
   carry(): void {
-    while (this.subQx >= CELL_Q) { this.subQx -= CELL_Q; this.cellX += 1n; }
-    while (this.subQx < 0n) { this.subQx += CELL_Q; this.cellX -= 1n; }
-    while (this.subQy >= CELL_Q) { this.subQy -= CELL_Q; this.cellY += 1n; }
-    while (this.subQy < 0n) { this.subQy += CELL_Q; this.cellY -= 1n; }
+    const qx = floorDivBigInt(this.subQx, CELL_Q);
+    this.subQx -= qx * CELL_Q;
+    this.cellX += qx;
+    const qy = floorDivBigInt(this.subQy, CELL_Q);
+    this.subQy -= qy * CELL_Q;
+    this.cellY += qy;
   }
 
   /** Legacy float64 view of this camera's reference point (top-left of viewport) and zoom.
