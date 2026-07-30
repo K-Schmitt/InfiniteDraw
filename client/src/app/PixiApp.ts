@@ -13,6 +13,7 @@ import { buildContextMenuItems } from '../ui/contextMenuItems';
 import type { StrokeBeginPayload } from '@shared/socket-events';
 import { CollabClient, type CollabDelegate } from '../network/CollabClient';
 import { RemoteStrokeQueue, type RemoteOpSink } from '../network/RemoteStrokeQueue';
+import { syncSnapshot } from '../network/snapshotSync';
 import type { ProjCamera } from '../coords/viewProject';
 import { decodeCamera, writePermalink } from './cameraPermalink';
 import { log, logThrottled, installDebugApi, SESSION_ID } from '../debug/logger';
@@ -114,14 +115,12 @@ export class PixiApp {
 
     const delegate: CollabDelegate = {
       loadSnapshot: (strokes) => {
-        const current = [...this.state.strokes];
-        log('state', 'loadSnapshot', { dropping: current.length, incoming: strokes.length });
-        this.state.loadSnapshot(strokes);
-        for (const s of current) this.remoteQueue.enqueueDelete(s.id);
-        // Force-add, not enqueueAdd: `state` above already contains every incoming stroke, so the
-        // ordinary isEcho check in applyRemoteAdd would treat all of them as already-rendered local
-        // commits and never build their Graphics. See applyRemoteForceAdd.
-        for (const s of strokes) this.remoteQueue.enqueueForceAdd(s);
+        log('state', 'loadSnapshot', {
+          dropping: this.state.strokes.length, incoming: strokes.length,
+        });
+        // syncSnapshot owns the enqueueForceAdd-vs-enqueueAdd decision (see its doc comment) —
+        // directly covered by snapshotSync.test.ts, not just a queue-primitive-level test.
+        syncSnapshot(strokes, this.state, this.remoteQueue);
       },
       // Socket callbacks only enqueue; the actual state/renderer work is drained under a per-frame
       // time budget in tick(). A peer flooding thousands of ops can no longer block this thread.

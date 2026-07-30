@@ -129,7 +129,7 @@ describe('RemoteStrokeQueue snapshot resync (regression)', () => {
     return { sink, rendered };
   }
 
-  it('BUG (ordinary enqueueAdd): renders nothing once state already holds every snapshot id', () => {
+  it('BUG (ordinary enqueueAdd): renders nothing once state already holds every id', () => {
     const ids = ['s1', 's2', 's3'];
     const { sink, rendered } = isEchoSink(ids); // state already bulk-replaced, as loadSnapshot does
     const q = new RemoteStrokeQueue(sink);
@@ -138,7 +138,7 @@ describe('RemoteStrokeQueue snapshot resync (regression)', () => {
     expect(rendered).toEqual([]); // the bug: not one snapshot stroke got rendered
   });
 
-  it('FIX (enqueueForceAdd): renders every snapshot stroke despite state already holding it', () => {
+  it('FIX (enqueueForceAdd): renders every snapshot stroke despite state holding it', () => {
     const ids = ['s1', 's2', 's3'];
     const { sink, rendered } = isEchoSink(ids); // same precondition as the bug case above
     const q = new RemoteStrokeQueue(sink);
