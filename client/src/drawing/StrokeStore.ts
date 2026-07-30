@@ -1,10 +1,13 @@
 import type { BrushStroke } from '@shared/stroke';
 import { computeBoundingBox, type BoundingBox } from './Culling';
+import { localBoundsOf } from './projectRings';
 
 export interface StrokeItem {
   stroke: BrushStroke;
   rings: number[][]; // outer ring + optional holes
   bbox: BoundingBox; // never changes after commit
+  /** Anchor-local bbox of `rings`. Cached so broad-phase queries never re-walk the vertices. */
+  ringBounds: BoundingBox;
   anchorX: number;
   anchorY: number;
 }
@@ -19,6 +22,7 @@ export class StrokeStore {
       stroke,
       rings,
       bbox,
+      ringBounds: localBoundsOf(rings),
       anchorX: (bbox.minX + bbox.maxX) / 2,
       anchorY: (bbox.minY + bbox.maxY) / 2,
     };

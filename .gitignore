@@ -37,6 +37,16 @@ client/coverage/
 # Save files (project data)
 *.lorien
 saves/
+server/data/*.bin
+data/
+
+# Debug traces
+server/logs/
+logs/
+*.jsonl
+
+# Editor local history
+.history/
 
 # Vite cache
 client/.vite/
@@ -44,8 +54,11 @@ client/.vite/
 
 # Agent / assistant context (local only)
 docs/
+!docs/deployment.md
 AGENTS.md
 CLAUDE.md
 NOTES.md
+!NOTES.md
 .nodalis/
 .claude/
+.playwright-mcp/

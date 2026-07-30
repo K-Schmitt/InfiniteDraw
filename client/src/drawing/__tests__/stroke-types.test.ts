@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { StrokeType, BYTES_PER_POINT, STROKE_HEADER_SIZE } from '@shared/stroke';
 import type { BrushStroke, Color, Point } from '@shared/stroke';
+import { originAnchor, originBbox } from '@shared/anchor';
 
 describe('BrushStroke type constants', () => {
   it('StrokeType values are unique integers', () => {
@@ -36,6 +37,9 @@ describe('BrushStroke structure', () => {
       pressures,
       layerId: 'layer-1',
       createdAt: Date.now(),
+      anchor: originAnchor(),
+      zIndex: 0,
+      cellBbox: originBbox(),
     };
 
     expect(stroke.type).toBe(StrokeType.BRUSH);

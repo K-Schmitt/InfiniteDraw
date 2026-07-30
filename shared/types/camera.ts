@@ -41,3 +41,11 @@ export const DEFAULT_CAMERA: Camera = {
   y: 0,
   zoom: 1.0,
 };
+
+/**
+ * Advisory zoom guard rails for legacy float64 consumers (grid, HUD formatting).
+ * These do NOT bound navigation: `HierCamera` level/cell are BigInt and grow without limit.
+ * They exist only so a float64 `Camera.zoom` never reaches 0 or Infinity.
+ */
+export const MIN_ZOOM = Number.MIN_SAFE_INTEGER > 0 ? 1 : 1e-300;
+export const MAX_ZOOM = 1e300;

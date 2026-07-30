@@ -4,10 +4,10 @@
     "module": "NodeNext",
     "moduleResolution": "nodenext",
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": "..",
     "paths": {
       "@shared/*": ["../shared/types/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src", "../shared/types"]
 }

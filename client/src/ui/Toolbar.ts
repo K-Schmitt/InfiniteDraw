@@ -39,6 +39,7 @@ export class Toolbar {
   constructor(
     private readonly settings: ToolSettings,
     private readonly manager: ToolManager,
+    private readonly onExportSvg: () => void,
   ) {
     this.root.id = 'toolbar';
     this.root.append(
@@ -47,6 +48,7 @@ export class Toolbar {
       this.buildSizeRow(),
       this.buildColorGroup(),
       this.buildPalette(),
+      this.buildActionRow(),
     );
     this.selectShape(this.settings.shape);
     this.selectTool('brush');
@@ -167,6 +169,14 @@ export class Toolbar {
   private pick(slot: 'primary' | 'secondary', color: Color): void {
     this.settings[slot] = { ...color };
     this.syncColors();
+  }
+
+  private buildActionRow(): HTMLElement {
+    const group = makeGroup();
+    const btn = makeIconButton('⤓', 'Export canvas as SVG');
+    btn.addEventListener('click', () => this.onExportSvg());
+    group.appendChild(btn);
+    return group;
   }
 }
 

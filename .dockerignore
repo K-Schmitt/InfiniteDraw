@@ -1,0 +1,15 @@
+node_modules
+**/node_modules
+**/dist
+.git
+.github
+.history
+.gitnexus
+.nodalis
+.superpowers
+.playwright-mcp
+.claude
+docs
+data
+logs
+*.log

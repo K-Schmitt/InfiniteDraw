@@ -15,6 +15,8 @@
  *     u8   pressure     (0–255, maps to 0.0–1.0)
  */
 
+import type { CellAnchor, CellBbox } from './anchor.js';
+
 export const StrokeType = {
   BRUSH: 0,
   ERASER: 1,
@@ -57,7 +59,15 @@ export interface BrushStroke {
   points: Point[];
   pressures: number[];
   layerId: string;
+  /** User who created this stroke (set by server, never trusted from client). */
+  ownerId?: string;
   createdAt: number;
+  /** Absolute hierarchical anchor; `points`/`holes` are cell-local floats in [0, LOCAL_SPAN). */
+  anchor: CellAnchor;
+  /** Stable global paint order; restored across undo/redo, sorted before render. */
+  zIndex: number;
+  /** Anchored extent in cell units, for viewport culling before any float. */
+  cellBbox: CellBbox;
   /**
    * When true the `points` describe a solid polygon to fill (paint-bucket / filled
    * shapes, or eraser remnants) instead of a centerline traced by perfect-freehand.

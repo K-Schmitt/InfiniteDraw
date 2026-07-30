@@ -1,16 +1,18 @@
 import type { Graphics } from 'pixi.js';
 import type { BrushStroke } from '@shared/stroke';
-import type { Camera } from '@shared/camera';
 import { strokeToRings } from '../drawing/strokeToPath';
 import { fillRings, type FillOptions } from '../drawing/fillRings';
 
-/** Renders a transient stroke into `gfx` projected to screen space — for live tool previews. */
-export function drawStrokePreview(gfx: Graphics, stroke: BrushStroke, camera: Camera): void {
+/**
+ * Renders a transient frame-local stroke into `gfx` — the gesture's points are camera-frame
+ * offsets, so screen = point × frameScale (pixels per local unit). For live tool previews.
+ */
+export function drawStrokePreview(gfx: Graphics, stroke: BrushStroke, frameScale: number): void {
   gfx.clear();
   const opts: FillOptions = {
-    originX: camera.x,
-    originY: camera.y,
-    scale: camera.zoom,
+    originX: 0,
+    originY: 0,
+    scale: frameScale,
     color: (stroke.color.r << 16) | (stroke.color.g << 8) | stroke.color.b,
     alpha: stroke.color.a / 255,
   };
