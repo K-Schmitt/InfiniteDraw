@@ -93,7 +93,22 @@ describe('EraserSession', () => {
     }
     const sealed = session.seal();
     expect(sealed.removed).toEqual(['a']);
-    // A horizontal cut across the square leaves two pieces, not forty.
+    // The swept band (x from ~12 to ~188) never reaches the square's x=0/x=200 edges, so the
+    // square stays one connected outer ring with an interior hole rather than splitting in two.
     expect(sealed.added.length).toBeLessThanOrEqual(4);
+  });
+
+  it('keeps all 4 outer corners when carving an interior hole (regression: closing-duplicate drop)', () => {
+    // polygon-clipping's output rings are self-closing (first === last point). Feeding that
+    // straight into simplifyRing's Douglas-Peucker pass makes it see a zero-length edge at the
+    // wrap point and silently drop a real corner — the square's outer boundary must come back as
+    // 4 distinct corners, not a degenerate 3-point triangle.
+    const session = new EraserSession({ camera, cameraScale: 1 });
+    const stamp = eraserStamp([{ x: 100, y: 100 }], 10);
+    session.take([candidate('a', BIG_SQUARE)], stamp);
+    session.carve(stamp);
+    const sealed = session.seal();
+    expect(sealed.added).toHaveLength(1);
+    expect(sealed.added[0]!.points).toHaveLength(4);
   });
 });

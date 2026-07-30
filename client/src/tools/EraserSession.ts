@@ -124,7 +124,9 @@ export class EraserSession {
   }
 
   private remnant(piece: readonly Pair[][], source: BrushStroke): BrushStroke {
-    const rings = piece.map((ring) => simplifyRing(toFlat(ring), REMNANT_TOLERANCE));
+    const rings = piece.map((ring) =>
+      simplifyRing(toFlat(dropClosingDuplicate(ring)), REMNANT_TOLERANCE),
+    );
     return anchoredStroke({
       type: StrokeType.BRUSH,
       color: source.color,
@@ -139,6 +141,21 @@ export class EraserSession {
       ...(source.background ? { background: true } : {}),
     });
   }
+}
+
+/**
+ * polygon-clipping documents its output rings as self-closing (first === last) — every other ring
+ * format in this codebase (traceMask, ringToPairs, hitTest's pointInPolygon) is open, closure
+ * implicit. Left in, the duplicate makes the downstream Douglas-Peucker pass in `simplifyRing` see
+ * a zero-length edge at both wrap points and drop a real corner instead. Same fix as
+ * `exactRegion.ts`'s `dropClosingDuplicate` (un-exported there, so duplicated here) — `piece` comes
+ * from the same `subtractStamp`/polygon-clipping origin and has the same self-closing shape.
+ */
+function dropClosingDuplicate(ring: readonly Pair[]): readonly Pair[] {
+  if (ring.length < 2) return ring;
+  const first = ring[0]!;
+  const last = ring[ring.length - 1]!;
+  return first[0] === last[0] && first[1] === last[1] ? ring.slice(0, -1) : ring;
 }
 
 function toFlat(ring: readonly Pair[]): number[] {
