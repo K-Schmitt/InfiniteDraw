@@ -1,17 +1,19 @@
-import { Container, Graphics } from 'pixi.js';
+import { Container, Graphics, type Renderer } from 'pixi.js';
 import type { BrushStroke, Color, Point } from '@shared/stroke';
 import { projectToFrame, CULLED, type ProjCamera } from '../coords/viewProject';
-import { anchorScaleOf } from '../coords/viewScale';
+import { anchorScaleOf, frameScaleOf } from '../coords/viewScale';
 import { strokeToRings } from './strokeToPath';
 import { fillRings } from './fillRings';
 import { pointInRings } from './hitTest';
-import { enclosedRegionAt, ringsAdjacent } from './fillRegion';
+import { ringsAdjacent } from './ringsAdjacent';
 import { selectFillWalls, sameColor } from './fillWalls';
 import { StrokeStore, type StrokeItem } from './StrokeStore';
 import {
   ringsToFrame, ringArea, frameBboxOf, cameraInsideStroke, localBboxToFrame,
 } from './projectRings';
 import { decideFill, type FillCandidate } from './fillDecision';
+import { renderWallMask } from './fill/renderWallMask';
+import { resolveFill, type ResolvedFill } from './fill/resolveFill';
 import { log, logThrottled } from '../debug/logger';
 import type { ExportSource } from '../export/exportScope';
 
@@ -29,6 +31,9 @@ const FRAME_REBAKE_GAP = 2;
 const FRAME_MAX_SCREEN_SPAN = 2 ** 22;
 // background fills sort below every real stroke so outlines stay visible on top (Bug 1 fix)
 const BG_ORDER = 1e9;
+// Wall thickening, in screen px, applied when building the fill mask. Seals the sub-pixel gaps
+// a hand-drawn "closed" shape always has, without visibly shrinking the filled region.
+const FILL_GAP_PX = 2;
 
 type RenderMode = 'baked' | 'bleed' | 'frame';
 
@@ -89,8 +94,12 @@ export class StrokeRenderer {
   private last: CameraSnapshot | null = null;
   private screenW = 0;
   private screenH = 0;
+  // World→pixel scale (= 2^(level+frac)), refreshed every redraw independently of `last` — a
+  // fill click can land between two redraws right after addStroke/removeStroke/recolorStroke null
+  // `last` out, and frameScaleOf(cameraScale, camera.level) must stay correct even then.
+  private cameraScale = 1;
 
-  constructor() {
+  constructor(private readonly pixi: Renderer) {
     this.container = new Container();
     this.vectorLayer.sortableChildren = true;
     this.container.addChild(this.vectorLayer);
@@ -229,7 +238,7 @@ export class StrokeRenderer {
       projected.map((c) => ({ stroke: c.stroke, rings: c.frameRings })),
       color,
     );
-    const region = enclosedRegionAt(frame, walls);
+    const region = this.regionAt(frame, walls, camera);
     const decision = decideFill(frame, region, projected.map(toFillCandidate));
     log('geom', `fillTarget -> ${decision.kind}`, {
       frame, walls: walls.length, ringCount: region?.length ?? 0, visible: projected.length,
@@ -238,6 +247,52 @@ export class StrokeRenderer {
     if (decision.kind === 'recolorRegion') return { kind: 'recolor', ids: [decision.fillId] };
     if (decision.kind === 'recolorStroke') return this.recolorGroupOf(decision.strokeId, camera);
     return null;
+  }
+
+  // Raster stage locates the region and its bounding walls; the exact stage rebuilds the
+  // boundary from those walls alone.
+  //
+  // frameScale is derived from `camera`, NOT read from `this.last`: addStroke/removeStroke/
+  // recolorStroke all null `last` out, and its fallback of 1 when the real value can be 2.07
+  // (frameScale = 2**frac) would mean a 2× wrong mask and a 2× wrong seed.
+  //
+  // Two passes: `gapPx: 0` first, so a properly closed shape gets an exact-size region; only an
+  // escaped flood pays for the FILL_GAP_PX thickening that seals hand-drawn gaps.
+  private regionAt(
+    frame: Point,
+    walls: readonly number[][][],
+    camera: ProjCamera,
+  ): number[][] | null {
+    if (this.screenW === 0 || this.screenH === 0) return null;
+    const frameScale = frameScaleOf(this.cameraScale, camera.level);
+    const tight = this.resolveAt(frame, walls, { frameScale, gapPx: 0 });
+    return (tight ?? this.resolveAt(frame, walls, { frameScale, gapPx: FILL_GAP_PX }))?.rings
+      ?? null;
+  }
+
+  private resolveAt(
+    frame: Point,
+    walls: readonly number[][][],
+    view: { readonly frameScale: number; readonly gapPx: number },
+  ): ResolvedFill | null {
+    const buffer = renderWallMask({
+      renderer: this.pixi,
+      walls: walls.map((rings) => ({ frameRings: rings })),
+      view: {
+        width: Math.ceil(this.screenW),
+        height: Math.ceil(this.screenH),
+        frameScale: view.frameScale,
+        gapPx: view.gapPx,
+      },
+    });
+    return resolveFill({
+      source: { buffer, wallRings: walls },
+      seedPx: {
+        x: Math.round(frame.x * view.frameScale),
+        y: Math.round(frame.y * view.frameScale),
+      },
+      frameScale: view.frameScale,
+    });
   }
 
   /** Recolor target for a direct stroke hit: the connected same-color group around it. */
@@ -313,10 +368,12 @@ export class StrokeRenderer {
 
   // ─── Render ──────────────────────────────────────────────────────────────
 
-  redraw(camera: ProjCamera, frameScale: number, screenW: number, screenH: number): void {
+  redraw(camera: ProjCamera, cameraScale: number, screenW: number, screenH: number): void {
     this.flushDestroyed();
     this.screenW = screenW;
     this.screenH = screenH;
+    this.cameraScale = cameraScale;
+    const frameScale = frameScaleOf(cameraScale, camera.level);
     if (this.unchanged(camera, frameScale)) return;
     this.last = snapshot(camera, frameScale);
     const t0 = performance.now();

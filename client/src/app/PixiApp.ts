@@ -100,7 +100,7 @@ export class PixiApp {
 
     this.grid = new GridBackground();
     this.app.stage.addChild(this.grid.graphics);
-    this.renderer = new StrokeRenderer();
+    this.renderer = new StrokeRenderer(this.app.renderer);
     this.app.stage.addChild(this.renderer.container);
 
     this.tools = new ToolManager(this.settings, this.createCanvasApi(), (c) => this.applyPick(c));
@@ -270,7 +270,7 @@ export class PixiApp {
       }));
     }
     this.grid.draw(this.camera.toLegacyCamera(), width, height);
-    this.renderer.redraw(this.camera.projCamera, this.camera.frameScale, width, height);
+    this.renderer.redraw(this.camera.projCamera, this.camera.scale, width, height);
     this.tools.refreshPreview(this.camera);
     this.collabClient.refresh(this.camera);
     this.zoomHud.textContent = formatZoom(this.camera.logZoom);
