@@ -13,6 +13,7 @@ import { toWireStroke, fromWireStroke, fromWireProject } from '@shared/wireStrok
 import { log, logThrottled, SESSION_ID } from '../debug/logger';
 import type { HierCamera } from '../app/HierCamera';
 import { projectToFrame, CULLED } from '../coords/viewProject';
+import { nextReconnectAction } from './reconnectPolicy';
 
 /** PixiApp implements this so CollabClient can modify state + renderer. */
 export interface CollabDelegate {
@@ -75,6 +76,8 @@ export class CollabClient {
   // active batch. Retired graphics are destroyed from `refresh`, i.e. between frames.
   private readonly pendingDestroy: Graphics[] = [];
   private lastCursorEmit = 0;
+  private hasJoinedBefore = false;
+  private connectCount = 0;
 
   constructor(serverUrl: string, delegate: CollabDelegate) {
     this.delegate = delegate;
@@ -198,9 +201,26 @@ export class CollabClient {
   // ---- incoming handlers -----------------------------------------------------
 
   private onConnect(): void {
-    this.socket.emit('room:create', (_roomId) => {
-      // connected and synced
+    this.connectCount++;
+    const action = nextReconnectAction({
+      hasJoinedBefore: this.hasJoinedBefore,
+      attempts: this.connectCount,
     });
+    log('net', `connect -> ${action}`, { connectCount: this.connectCount });
+    this.clearTransient();
+    this.socket.emit('room:join', 'global', (error) => {
+      if (error) {
+        log('error', 'room:join failed', { error });
+        return;
+      }
+      this.hasJoinedBefore = true;
+    });
+  }
+
+  /** Drops live previews and ghosts: their tentative ids and peers are gone after a reconnect. */
+  private clearTransient(): void {
+    for (const id of [...this.liveStrokes.keys()]) this.removeLiveStroke(id);
+    for (const userId of [...this.ghosts.keys()]) this.removeGhost(userId);
   }
 
   private onStrokeAdded(stroke: BrushStroke): void {

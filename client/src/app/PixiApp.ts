@@ -113,14 +113,11 @@ export class PixiApp {
 
     const delegate: CollabDelegate = {
       loadSnapshot: (strokes) => {
-        // Reset local state and renderer to match the room snapshot.
-        // Simplest approach: remove all rendered strokes, then re-add.
         const current = [...this.state.strokes];
         log('state', 'loadSnapshot', { dropping: current.length, incoming: strokes.length });
-        for (const s of current) this.renderer.removeStroke(s.id);
         this.state.loadSnapshot(strokes);
-        for (const s of strokes) this.renderer.addStroke(s);
-        log('state', 'loadSnapshot done', { strokes: strokes.length });
+        for (const s of current) this.remoteQueue.enqueueDelete(s.id);
+        for (const s of strokes) this.remoteQueue.enqueueAdd(s);
       },
       // Socket callbacks only enqueue; the actual state/renderer work is drained under a per-frame
       // time budget in tick(). A peer flooding thousands of ops can no longer block this thread.

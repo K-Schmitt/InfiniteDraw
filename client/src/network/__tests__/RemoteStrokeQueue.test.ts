@@ -82,4 +82,24 @@ describe('RemoteStrokeQueue time budget', () => {
     expect(adds.length).toBe(3);
     expect(q.size).toBe(0);
   });
+
+  it('drains a reconnect snapshot across multiple tick()-style flushes, not one', () => {
+    // Stands in for PixiApp.loadSnapshot enqueueing a whole room (N strokes) on reconnect: the
+    // queue must spread that across frames instead of committing it all inside one flush call.
+    const ids = ['s1', 's2', 's3', 's4', 's5'];
+    const { sink, adds } = makeSink();
+    const q = new RemoteStrokeQueue(sink);
+    for (const id of ids) q.enqueueAdd(fakeStroke(id));
+    // Each applied op "costs" 4ms — deterministic, no CPU spin.
+    const times = [0, 4, 8, 12, 16, 20];
+    let i = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => times[Math.min(i++, times.length - 1)]);
+    q.flush(3); // one "tick": budget exceeded after the first op
+    expect(adds.length).toBeLessThan(ids.length);
+    expect(q.size).toBeGreaterThan(0);
+    vi.restoreAllMocks();
+    q.flush(100); // a later "tick" drains the remainder
+    expect(adds.length).toBe(ids.length);
+    expect(q.size).toBe(0);
+  });
 });
