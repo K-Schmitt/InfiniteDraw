@@ -7,13 +7,13 @@
 - **Required stack (per contract):** Vite TypeScript, Socket.io, perfect-freehand, PixiJS + WebGL
 
 ### Milestone Timeline
-| Milestone | Days | Cumulative |
-|-----------|------|------------|
-| 1 — Architecture + camera | 5d | 5d |
-| 2 — Drawing tools | 4d | 9d |
-| 3 — Serialization + undo | 4d | 13d |
-| 4 — Real-time collab | 5d | 18d |
-| 5 — Polish + export | 3d | 21d |
+| Milestone | Days | Cumulative | Status |
+|-----------|------|------------|--------|
+| 1 — Architecture + camera | 5d | 5d | DONE |
+| 2 — Drawing tools | 4d | 9d | DONE |
+| 3 — Serialization + undo | 4d | 13d | DONE |
+| 4 — Real-time collab | 5d | 18d | DONE |
+| 5 — Polish + export | 3d | 21d | DONE |
 
 ## Architecture Decisions
 
@@ -211,3 +211,9 @@ remains (see the OPEN zoom-out item above). Debt: world-anchored camera for full
 
 ## Lessons Learned
 _(fill in as the project evolves)_
+
+### v4.0 delivered
+- Contract: Ctrl+right-click context menu · Zen mode · SVG export · production deployment (Coolify)
+- Beyond contract: paint bucket rebuilt (two-stage raster + exact), eraser gesture batching,
+  reconnect resync, six-case zoom acceptance suite, deep-zoom permalinks
+- Known limitations are enumerated with root causes in the sections above.
