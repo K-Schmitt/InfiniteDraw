@@ -13,6 +13,7 @@ import {
 } from './projectRings';
 import { decideFill, type FillCandidate } from './fillDecision';
 import { log, logThrottled } from '../debug/logger';
+import type { ExportSource } from '../export/exportScope';
 
 const HIDE_THRESHOLD = 0.02;
 const MAX_SCREEN_STROKE_WIDTH = 2e34;
@@ -167,6 +168,22 @@ export class StrokeRenderer {
     p.gfx.clear();
     fillRings(p.gfx, item.rings, fillOptions(item.stroke));
     this.last = null;
+  }
+
+  /** Every committed stroke with its baked anchor-local rings, for SVG export. */
+  exportSources(): ExportSource[] {
+    const out: ExportSource[] = [];
+    for (const item of this.store.all()) {
+      out.push({
+        id: item.stroke.id,
+        anchor: item.stroke.anchor,
+        rings: item.rings,
+        color: item.stroke.color,
+        zIndex: item.stroke.zIndex,
+        isBackground: !!item.stroke.background,
+      });
+    }
+    return out;
   }
 
   // ─── Hit-testing (eraser / fill / eyedropper), all in the camera frame ───────

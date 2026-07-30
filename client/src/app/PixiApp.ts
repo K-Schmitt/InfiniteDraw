@@ -16,8 +16,14 @@ import { RemoteStrokeQueue, type RemoteOpSink } from '../network/RemoteStrokeQue
 import type { ProjCamera } from '../coords/viewProject';
 import { log, logThrottled, installDebugApi, SESSION_ID } from '../debug/logger';
 import { installErrorHooks, guarded } from '../debug/installErrorHooks';
+import { buildExportScope } from '../export/exportScope';
+import { buildSvgDocument } from '../export/svgDocument';
+import { downloadBlob, svgFilename } from '../export/downloadBlob';
 
 const ZOOM_FACTOR = 1.12;
+
+/** Canvas paper colour. MUST match `app.init`'s `backgroundColor` — the SVG export reuses it. */
+const CANVAS_BACKGROUND_HEX = '#f5f0e8';
 
 // Per-frame wall-clock budget for draining remote stroke ops. Kept small so a peer's flood yields
 // the main thread back to the local user's own drawing well within a 60fps frame (~16ms).
@@ -99,7 +105,7 @@ export class PixiApp {
 
     this.tools = new ToolManager(this.settings, this.createCanvasApi(), (c) => this.applyPick(c));
     this.app.stage.addChild(this.tools.previewLayer);
-    this.toolbar = new Toolbar(this.settings, this.tools);
+    this.toolbar = new Toolbar(this.settings, this.tools, () => this.exportSvg());
     document.body.appendChild(this.toolbar.root);
     this.zen = new ZenMode(document.body);
     this.contextMenu = new ContextMenu(buildContextMenuItems(this.toolbar, this.zen));
@@ -224,6 +230,29 @@ export class PixiApp {
   private applyPick(color: Color): void {
     this.settings.primary = color;
     this.toolbar.syncColors();
+  }
+
+  // Exports relative to the camera's own anchor: there are no world coordinates, so an SVG
+  // viewBox only exists once one reference cell is chosen. Strokes too far from it to share a
+  // float64 frame — a level gap past ~53, or raw grid distance at a similar level — are
+  // reported rather than silently dropped.
+  private exportSvg(): void {
+    const camera = this.camera.projCamera;
+    const scope = buildExportScope(this.renderer.exportSources(), {
+      level: camera.level,
+      cell: { ...camera.cell },
+    });
+    const svg = buildSvgDocument(scope, CANVAS_BACKGROUND_HEX);
+    log('life', 'svg export', {
+      items: scope.items.length, skipped: scope.skipped, bytes: svg.length,
+      reference: { level: camera.level, cell: `${camera.cell.x},${camera.cell.y}` },
+    });
+    downloadBlob(svg, svgFilename(Date.now()), 'image/svg+xml');
+    if (scope.skipped > 0) {
+      log('error', `SVG export omitted ${scope.skipped} strokes outside the float64 window`, {
+        referenceLevel: camera.level,
+      });
+    }
   }
 
   private tick(): void {
