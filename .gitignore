@@ -58,6 +58,7 @@ docs/
 AGENTS.md
 CLAUDE.md
 NOTES.md
+!NOTES.md
 .nodalis/
 .claude/
 .playwright-mcp/
