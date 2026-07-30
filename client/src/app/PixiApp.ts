@@ -14,6 +14,7 @@ import type { StrokeBeginPayload } from '@shared/socket-events';
 import { CollabClient, type CollabDelegate } from '../network/CollabClient';
 import { RemoteStrokeQueue, type RemoteOpSink } from '../network/RemoteStrokeQueue';
 import type { ProjCamera } from '../coords/viewProject';
+import { decodeCamera, writePermalink } from './cameraPermalink';
 import { log, logThrottled, installDebugApi, SESSION_ID } from '../debug/logger';
 import { installErrorHooks, guarded } from '../debug/installErrorHooks';
 import { buildExportScope } from '../export/exportScope';
@@ -137,6 +138,9 @@ export class PixiApp {
 
     this.setupInput(this.app.canvas as HTMLCanvasElement);
     this.app.ticker.add(() => this.tick());
+
+    const restored = decodeCamera(window.location.hash);
+    if (restored) this.camera.restore(restored);
   }
 
   private remoteOpSink(): RemoteOpSink {
@@ -443,12 +447,17 @@ export class PixiApp {
       this.contextMenu.close();
       return void this.zen.toggle();
     }
+    if (key === 'c' && e.shiftKey) return this.copyPermalink();
     if (key === 'x') return this.toolbar.swap();
     const tool = SHORTCUTS[key];
     if (tool) {
       log('tool', 'tool selected by shortcut', { key, tool, from: this.tools.activeId });
       this.toolbar.selectTool(tool);
     }
+  }
+
+  private copyPermalink(): void {
+    return void writePermalink(this.camera.projCamera);
   }
 
   private run(instructions: RendererInstruction[]): void {

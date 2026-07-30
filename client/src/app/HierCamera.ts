@@ -187,4 +187,17 @@ export class HierCamera {
     const legacy = this.toLegacyCamera();
     return { x: screenX / legacy.zoom + legacy.x, y: screenY / legacy.zoom + legacy.y };
   }
+
+  /** Jumps to an exact camera position (permalink restore). Fraction resets to 0. */
+  restore(position: ProjCamera): void {
+    this.level = position.level;
+    this.cellX = position.cell.x;
+    this.cellY = position.cell.y;
+    this.setSub(position.sub.x, position.sub.y);
+    this.frac = 0;
+    this.carry();
+    log('camera', 'restored from permalink', {
+      level: this.level, cell: this.cellText(), sub: { x: this.subX, y: this.subY },
+    });
+  }
 }
