@@ -118,7 +118,10 @@ export class PixiApp {
         log('state', 'loadSnapshot', { dropping: current.length, incoming: strokes.length });
         this.state.loadSnapshot(strokes);
         for (const s of current) this.remoteQueue.enqueueDelete(s.id);
-        for (const s of strokes) this.remoteQueue.enqueueAdd(s);
+        // Force-add, not enqueueAdd: `state` above already contains every incoming stroke, so the
+        // ordinary isEcho check in applyRemoteAdd would treat all of them as already-rendered local
+        // commits and never build their Graphics. See applyRemoteForceAdd.
+        for (const s of strokes) this.remoteQueue.enqueueForceAdd(s);
       },
       // Socket callbacks only enqueue; the actual state/renderer work is drained under a per-frame
       // time budget in tick(). A peer flooding thousands of ops can no longer block this thread.
@@ -147,6 +150,7 @@ export class PixiApp {
     return {
       hasStroke: (id) => this.state.hasStroke(id),
       applyAdd: (stroke) => this.applyRemoteAdd(stroke),
+      applyForceAdd: (stroke) => this.applyRemoteForceAdd(stroke),
       applyDelete: (id) => this.applyRemoteDelete(id),
     };
   }
@@ -166,6 +170,15 @@ export class PixiApp {
       return;
     }
     this.state.addRemoteStroke(stroke);
+    this.renderer.addStroke(stroke);
+  }
+
+  // Snapshot resync (join/reconnect): `state` was already bulk-replaced synchronously by
+  // loadSnapshot, so every queued stroke here is already "known" to state before this drains —
+  // the isEcho heuristic in applyRemoteAdd would misfire as "already rendered" for all of them.
+  // Render unconditionally; state itself was already updated, so it is not touched again here.
+  private applyRemoteForceAdd(stroke: BrushStroke): void {
+    log('state', 'snapshot stroke rendered', { id: stroke.id, total: this.state.strokes.length });
     this.renderer.addStroke(stroke);
   }
 
