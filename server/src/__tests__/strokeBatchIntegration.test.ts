@@ -135,6 +135,43 @@ describe('stroke:batch integration', () => {
     expect(grown).toBeLessThan(2_000);
   });
 
+  it('handles a real erase-shaped batch: deletes originals, adds their remnants', async () => {
+    const sender = await connectAndJoin(port);
+    const receiver = await connectAndJoin(port);
+    sockets.push(sender, receiver);
+
+    // Seed the room with two "original" strokes via a preliminary adds-only batch, the same way
+    // a normal stroke:commit would land them before an eraser gesture ever touches them.
+    const originals: WireStroke[] = [toWireStroke(stroke('orig1')), toWireStroke(stroke('orig2'))];
+    const seeded = nextEvent<StrokeBatchPayload>(receiver, 'stroke:batch');
+    sender.emit('stroke:batch', { deletes: [], adds: originals });
+    await seeded;
+
+    // Now erase them: a real eraser-gesture batch deletes the originals it touched and adds
+    // their carved remnants in the same message — not adds-only.
+    const remnants: WireStroke[] = [toWireStroke(stroke('rem1')), toWireStroke(stroke('rem2'))];
+    const batchesSeen: StrokeBatchPayload[] = [];
+    receiver.on('stroke:batch', (p: StrokeBatchPayload) => batchesSeen.push(p));
+    const erased = nextEvent<StrokeBatchPayload>(receiver, 'stroke:batch');
+    sender.emit('stroke:batch', { deletes: ['orig1', 'orig2'], adds: remnants });
+    const payload = await erased;
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(batchesSeen).toHaveLength(1);
+    expect(payload.deletes).toEqual(['orig1', 'orig2']);
+    expect(payload.adds.map((s) => s.id)).toEqual(['rem1', 'rem2']);
+
+    // Observer client: originals must be gone and remnants present — exactly 2 strokes, not 4
+    // (adds landing on top of undeleted originals) and not 0 (deletes racing ahead of adds).
+    const observer = await connectAndJoin(port);
+    sockets.push(observer);
+    const stateReady = nextEvent<WireProject>(observer, 'project:state');
+    await new Promise<void>((resolve) => observer.emit('room:create', () => resolve()));
+    const state = await stateReady;
+    expect(state.strokes.map((s) => s.id).sort()).toEqual(['rem1', 'rem2']);
+  });
+
   it('reconnect yields a fresh project:state with no duplicate ids', async () => {
     const sender = await connectAndJoin(port);
     sockets.push(sender);
