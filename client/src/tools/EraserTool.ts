@@ -1,33 +1,32 @@
 import { Graphics } from 'pixi.js';
-import type { BrushStroke, Point } from '@shared/stroke';
-import { StrokeType } from '@shared/stroke';
+import type { Point } from '@shared/stroke';
 import type { ProjCamera } from '../coords/viewProject';
 import type { HierCamera } from '../app/HierCamera';
 import { frameScaleOf } from '../coords/viewScale';
-import { eraserStamp, subtractStamp } from '../drawing/eraseGeometry';
-import { anchoredStroke } from './strokeFactory';
-import type { FramePoint } from '../drawing/anchorCommit';
+import { eraserStamp } from '../drawing/eraseGeometry';
+import { EraserSession } from './EraserSession';
 import type { Tool, ToolContext, ToolSettings, CanvasApi, FrameBox } from './Tool';
 import { log } from '../debug/logger';
 
 const CURSOR_COLOR = 0x999999;
 
-type Pair = [number, number];
-
 /**
- * Vector eraser. Subtracts a capsule-shaped stamp (swept under the cursor) from each stroke's
- * rendered area, working entirely in the camera frame so precision holds at any zoom depth.
- * Remnants are re-anchored and keep the source stroke's colour and paint order.
+ * Vector eraser. Subtracts a swept capsule from each stroke's area entirely in the camera frame,
+ * so precision holds at any zoom depth. The whole gesture is buffered in an `EraserSession` and
+ * committed once on pointer-up — the per-step commit-and-broadcast it used to do is what stalled
+ * receiving peers for 15 s and bloated the journal.
  */
 export class EraserTool implements Tool {
   readonly preview = new Graphics();
   readonly tentativeStrokeId = null;
+  private session: EraserSession | null = null;
   private last: Point | null = null;
   private cursor: Point | null = null;
   private camera: ProjCamera | null = null;
+  /** The camera the live session was anchored to; compared against `camera` to detect drift. */
+  private sessionCamera: ProjCamera | null = null;
   private cameraScale = 1;
   private frameRadius = 1;
-  private erasing = false;
 
   constructor(
     private readonly settings: ToolSettings,
@@ -35,126 +34,140 @@ export class EraserTool implements Tool {
   ) {}
 
   onDown(ctx: ToolContext): void {
-    this.erasing = true;
-    this.beginGesture(ctx);
+    this.syncCursor(ctx);
+    this.session = new EraserSession({ camera: ctx.projCamera, cameraScale: ctx.cameraScale });
+    this.sessionCamera = ctx.projCamera;
     log('tool', 'eraser gesture start', {
       frame: ctx.frame, size: this.settings.size, frameRadius: this.frameRadius,
       level: ctx.projCamera.level,
     });
-    this.eraseStep([ctx.frame]);
+    this.step([ctx.frame]);
     this.last = { ...ctx.frame };
   }
 
   onMove(ctx: ToolContext): void {
-    this.beginGesture(ctx);
-    if (!this.erasing || !this.last) {
-      // `last` unset while erasing means a previous step threw before assigning it — the
-      // gesture would then silently no-op for the rest of the drag, so make it visible.
-      if (this.erasing) log('error', 'eraser onMove with no `last` — gesture wedged', ctx.frame);
+    this.syncCursor(ctx);
+    if (!this.session) return;
+    if (!this.last) {
+      // A previous step threw before assigning `last` — without this log the gesture silently
+      // no-ops for the rest of the drag (this is what "gesture wedged" caught before the rewrite).
+      log('error', 'eraser onMove with no `last` — gesture wedged', ctx.frame);
       return;
     }
-    // Coalesce sub-radius moves into one step. Each step runs polygon-clipping against every
-    // overlapping stroke, so processing every coalesced pointer sample (dozens per frame at high
-    // report rates) is what pegged the eraser to multi-second INP. Let the segment grow until it
-    // covers meaningful distance, then subtract the whole capsule at once.
+    // Coalesce sub-radius moves: each step runs polygon-clipping, so processing every coalesced
+    // pointer sample is what pegged the eraser to multi-second INP.
     const minStep = Math.max(this.frameRadius * 0.5, 1e-6);
     if (dist(this.last, ctx.frame) < minStep) return;
-    this.eraseStep([this.last, ctx.frame]);
+    this.step([this.last, ctx.frame]);
     this.last = { ...ctx.frame };
   }
 
   onUp(): void {
-    log('tool', 'eraser gesture end', { wasErasing: this.erasing });
-    if (this.erasing) this.api.eraseEnd();
-    this.erasing = false;
-    this.last = null;
+    this.finish();
   }
 
   cancel(): void {
-    log('tool', 'eraser cancel', { wasErasing: this.erasing });
-    if (this.erasing) this.api.eraseEnd();
-    this.erasing = false;
-    this.last = null;
+    this.finish();
     this.cursor = null;
     this.preview.clear();
   }
 
+  /** Draws the eraser cursor plus the gesture's surviving geometry (nothing is committed yet). */
   refreshPreview(camera: HierCamera): void {
     this.preview.clear();
+    for (const shape of this.session?.workingRings() ?? []) {
+      for (const ring of shape.rings) {
+        const screen = toScreen(ring, camera);
+        if (screen.length >= 6) this.preview.poly(screen, true);
+      }
+      this.preview.fill({ color: rgb(shape.color), alpha: shape.color.a / 255 });
+    }
     if (!this.cursor) return;
     const s = camera.frameToScreen(this.cursor.x, this.cursor.y);
     this.preview.circle(s.x, s.y, this.settings.size / 2).stroke({ color: CURSOR_COLOR, width: 1 });
   }
 
-  private beginGesture(ctx: ToolContext): void {
+  private finish(): void {
+    if (!this.session) return;
+    const sealed = this.session.seal();
+    log('tool', 'eraser gesture end', {
+      removed: sealed.removed.length, added: sealed.added.length,
+    });
+    this.api.eraseCommit(sealed);
+    this.session = null;
+    this.sessionCamera = null;
+    this.last = null;
+  }
+
+  private syncCursor(ctx: ToolContext): void {
     this.cursor = { ...ctx.frame };
     this.camera = ctx.projCamera;
     this.cameraScale = ctx.cameraScale;
-    const frameScale = frameScaleOf(ctx.cameraScale, ctx.projCamera.level);
-    this.frameRadius = this.settings.size / 2 / frameScale;
+    this.frameRadius =
+      this.settings.size / 2 / frameScaleOf(ctx.cameraScale, ctx.projCamera.level);
   }
 
-  private eraseStep(path: Point[]): void {
-    if (!this.camera) return;
-    const t0 = performance.now();
+  private step(path: Point[]): void {
+    if (!this.session || !this.camera) return;
+    this.resealOnDrift();
     const stamp = eraserStamp(path, this.frameRadius);
     const box = expand(pathBox(path), this.frameRadius);
-    const removeIds: string[] = [];
-    const additions: BrushStroke[] = [];
-    const candidates = this.api.strokesInFrame(box, this.camera);
-    for (const cand of candidates) {
-      const result = subtractStamp(cand.frameRings, stamp);
-      if (result === null) continue; // stamp didn't touch this stroke
-      removeIds.push(cand.stroke.id);
-      for (const poly of result) additions.push(this.remnant(poly, cand.stroke));
-    }
-    const dt = performance.now() - t0;
-    const data = {
-      path, frameRadius: this.frameRadius, stampPolys: stamp.length,
-      candidates: candidates.length, removing: removeIds.length, adding: additions.length,
-      ms: +dt.toFixed(2),
-    };
-    if (dt >= 16) log('error', `SLOW eraseStep ${dt.toFixed(1)}ms`, data);
-    else log('tool', 'eraser step', data);
-    if (removeIds.length > 0) this.api.eraseLive(removeIds, additions);
+    const taken = this.session!.take(this.api.strokesInFrame(box, this.camera), stamp);
+    if (taken.length > 0) this.api.eraseTake(taken);
+    // `take()` already carved what it adopted this step; skip those to avoid a second
+    // polygon-clipping difference over the same geometry.
+    this.session!.carve(stamp, new Set(taken));
   }
 
-  // a leftover polygon (outer + holes, frame coords) → an anchored filled stroke, same colour/z
-  private remnant(poly: Pair[][], source: BrushStroke): BrushStroke {
-    return anchoredStroke({
-      type: StrokeType.BRUSH,
-      color: source.color,
-      screenSize: 1,
-      framePoints: toFramePoints(poly[0]!),
-      frameHoles: poly.slice(1).map(toFramePoints),
-      layerId: source.layerId,
-      camera: this.camera!,
-      cameraScale: this.cameraScale,
-      zIndex: source.zIndex,
-      filled: true,
-      ...(source.background ? { background: true } : {}),
+  /**
+   * A wheel-zoom during a held erase drag changes the live camera's level or cell, but the
+   * session's buffered pieces are still in the OLD frame — subtracting a new-frame stamp from
+   * them mixes coordinate systems (the origin-straddle bug class). Seal what is carved so far as
+   * its own batch and restart, rather than baking in a wrong offset on pre-existing shared strokes.
+   */
+  private resealOnDrift(): void {
+    if (!this.session || !this.camera || !this.sessionCamera) return;
+    if (!drifted(this.sessionCamera, this.camera)) return;
+    log('tool', 'eraser gesture split: camera re-anchored mid-drag', {
+      from: this.sessionCamera.level, to: this.camera.level,
     });
+    this.finish();
+    this.session = new EraserSession({ camera: this.camera, cameraScale: this.cameraScale });
+    this.sessionCamera = this.camera;
   }
 }
 
-function toFramePoints(ring: Pair[]): FramePoint[] {
-  return ring.map(([x, y]) => ({ x, y }));
+/** Level or cell change = a different frame origin. Sub-cell motion is not drift. */
+function drifted(a: ProjCamera, b: ProjCamera): boolean {
+  return a.level !== b.level || a.cell.x !== b.cell.x || a.cell.y !== b.cell.y;
+}
+
+function toScreen(ring: readonly number[], camera: HierCamera): number[] {
+  const out = new Array<number>(ring.length);
+  for (let i = 0; i < ring.length; i += 2) {
+    const s = camera.frameToScreen(ring[i]!, ring[i + 1]!);
+    out[i] = s.x;
+    out[i + 1] = s.y;
+  }
+  return out;
+}
+
+function rgb(color: { r: number; g: number; b: number }): number {
+  return (color.r << 16) | (color.g << 8) | color.b;
 }
 
 function dist(a: Point, b: Point): number {
   return Math.hypot(b.x - a.x, b.y - a.y);
 }
 
-function pathBox(path: Point[]): FrameBox {
+function pathBox(path: readonly Point[]): FrameBox {
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
   for (const p of path) {
-    minX = Math.min(minX, p.x);
-    minY = Math.min(minY, p.y);
-    maxX = Math.max(maxX, p.x);
-    maxY = Math.max(maxY, p.y);
+    minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
   }
   return { minX, minY, maxX, maxY };
 }

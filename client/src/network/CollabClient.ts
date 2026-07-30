@@ -24,6 +24,8 @@ export interface CollabDelegate {
   remoteStrokeDeleted(id: string): void;
   /** Remote user recolored a set of strokes (paint-bucket on existing shapes). */
   remoteStrokesRecolored(ids: readonly string[], color: Color): void;
+  /** Remote user applied one atomic multi-stroke edit (eraser gesture). */
+  remoteBatchApplied(deletes: readonly string[], adds: readonly BrushStroke[]): void;
 }
 
 type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
@@ -98,6 +100,10 @@ export class CollabClient {
       });
       this.onStrokeAdded(fromWireStroke(stroke));
     });
+    this.socket.on('stroke:batch', (p) => {
+      log('net', 'IN stroke:batch', { deletes: p.deletes.length, adds: p.adds.length });
+      this.delegate.remoteBatchApplied(p.deletes, p.adds.map(fromWireStroke));
+    });
     this.socket.on('stroke:deleted', (id) => {
       log('net', 'IN stroke:deleted', { id });
       this.delegate.remoteStrokeDeleted(id);
@@ -147,6 +153,19 @@ export class CollabClient {
   sendStrokeDelete(id: string): void {
     log('net', 'OUT stroke:delete', { id, connected: this.socket.connected });
     this.socket.emit('stroke:delete', id);
+  }
+
+  sendStrokeBatch(batch: {
+    readonly deletes: readonly string[];
+    readonly adds: readonly BrushStroke[];
+  }): void {
+    log('net', 'OUT stroke:batch', {
+      deletes: batch.deletes.length, adds: batch.adds.length, connected: this.socket.connected,
+    });
+    this.socket.emit('stroke:batch', {
+      deletes: [...batch.deletes],
+      adds: batch.adds.map(toWireStroke),
+    });
   }
 
   sendStrokeRecolor(ids: readonly string[], color: Color): void {

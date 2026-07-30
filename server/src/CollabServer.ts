@@ -9,13 +9,18 @@ import type {
   ConnectedUser,
   CursorMovePayload,
   RecolorPayload,
+  StrokeBatchPayload,
 } from '@shared/socket-events.js';
 import type { BrushStroke } from '@shared/stroke.js';
 import type { Project } from '@shared/project.js';
 import { toWireStroke, fromWireStroke, toWireProject, type WireStroke } from '@shared/wireStroke.js';
 import { GlobalRoom } from './room/GlobalRoom.js';
 import { StrokeJournal } from './storage/StrokeJournal.js';
+import { applyBatchOrder } from './batchOrder.js';
 import { log } from './debug/logger.js';
+
+type CollabSocket =
+  Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>;
 
 /**
  * Socket.io wiring for the single global room. Owns connection lifecycle, event relay,
@@ -72,6 +77,7 @@ export class CollabServer {
       this.relay(socket, 'stroke:point', { ...p, userId: socket.data.userId! });
     });
     socket.on('stroke:commit', (s) => { void this.handleCommit(socket, s); });
+    socket.on('stroke:batch', (p) => { void this.handleBatch(socket, p); });
     socket.on('stroke:preview', (p) => {
       log('net', 'IN stroke:preview', { socketId: socket.id, id: p.id, points: p.points.length });
       this.relay(socket, 'stroke:preview', p);
@@ -176,6 +182,39 @@ export class CollabServer {
       roomStrokes: this.room.size(),
     });
     this.io.to(socket.data.roomId).emit('stroke:added', toWireStroke(stroke));
+  }
+
+  // Applies a whole eraser gesture as one wire message: deletes first, then the remnants in one
+  // zIndex block, then a single broadcast. NOT atomic against a concurrent `room:join` — each
+  // delete/add is a separately-awaited journal append (real fs I/O, a real event-loop yield), so
+  // a join landing mid-loop can observe a torn snapshot (deletes applied, adds not yet).
+  // Accepted for this project's room size and traffic; if that changes, serialize room-mutating
+  // handlers behind a per-room promise chain rather than trusting the word "atomic".
+  // (`nextZ` itself is safe: its read/compute/write has no `await` between them.)
+  // Rebroadcast to the room including the author, so the author adopts the authoritative order
+  // exactly as `stroke:added` already does.
+  private async handleBatch(
+    socket: CollabSocket,
+    payload: StrokeBatchPayload,
+  ): Promise<void> {
+    if (!this.room || !socket.data.roomId) return;
+    for (const id of payload.deletes) await this.room.deleteStroke(id);
+    const incoming = payload.adds.map(fromWireStroke).filter((s) => validateStroke(s) === null);
+    const ordered = applyBatchOrder(incoming, {
+      nextZ: this.nextZ,
+      ownerId: socket.data.userId!,
+    });
+    this.nextZ = ordered.nextZ;
+    for (const stroke of ordered.strokes) await this.room.addStroke(stroke);
+    log('net', 'IN stroke:batch -> OUT stroke:batch', {
+      socketId: socket.id, userId: socket.data.userId,
+      deletes: payload.deletes.length, adds: ordered.strokes.length,
+      rejected: payload.adds.length - incoming.length, roomStrokes: this.room.size(),
+    });
+    this.io.to(socket.data.roomId).emit('stroke:batch', {
+      deletes: payload.deletes,
+      adds: ordered.strokes.map(toWireStroke),
+    });
   }
 
   private async handleDelete(

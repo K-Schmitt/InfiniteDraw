@@ -4,6 +4,7 @@ import type { ProjCamera } from '../coords/viewProject';
 import type { HierCamera } from '../app/HierCamera';
 import type { FillTargetResult, FrameCandidate } from '../drawing/StrokeRenderer';
 import type { ShapeKind } from './shapeGeometry';
+import type { SealedErase } from './EraserSession';
 
 /** Axis-aligned bounds in camera-frame local units. */
 export interface FrameBox {
@@ -39,10 +40,10 @@ export interface ToolContext {
 /** How tools mutate the scene and query existing strokes (implemented by PixiApp). */
 export interface CanvasApi {
   add(stroke: BrushStroke): void;
-  /** Apply one eraser step live (no history). */
-  eraseLive(removeIds: readonly string[], additions: readonly BrushStroke[]): void;
-  /** Seal the current erase gesture into a single undo step. */
-  eraseEnd(): void;
+  /** Removes strokes an in-progress erase has adopted (no history, no broadcast yet). */
+  eraseTake(ids: readonly string[]): void;
+  /** Seals one erase gesture: one undo step, one batched broadcast. */
+  eraseCommit(sealed: SealedErase): void;
   /** Strokes overlapping a frame box, with their rings already projected to the camera frame. */
   strokesInFrame(box: FrameBox, camera: ProjCamera): FrameCandidate[];
   pickColorAt(frame: Point, camera: ProjCamera): Color | undefined;

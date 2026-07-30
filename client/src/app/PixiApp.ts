@@ -19,6 +19,7 @@ import { installErrorHooks, guarded } from '../debug/installErrorHooks';
 import { buildExportScope } from '../export/exportScope';
 import { buildSvgDocument } from '../export/svgDocument';
 import { downloadBlob, svgFilename } from '../export/downloadBlob';
+import type { SealedErase } from '../tools/EraserSession';
 
 const ZOOM_FACTOR = 1.12;
 
@@ -126,6 +127,12 @@ export class PixiApp {
       remoteStrokeAdded: (stroke) => this.remoteQueue.enqueueAdd(stroke),
       remoteStrokeDeleted: (id) => this.remoteQueue.enqueueDelete(id),
       remoteStrokesRecolored: (ids, color) => this.applyRemoteRecolor(ids, color),
+      // Deletes before adds, and both through the existing per-frame queue so a peer's whole
+      // gesture is spread across frames instead of blocking this thread.
+      remoteBatchApplied: (deletes, adds) => {
+        for (const id of deletes) this.remoteQueue.enqueueDelete(id);
+        for (const stroke of adds) this.remoteQueue.enqueueAdd(stroke);
+      },
     };
     this.remoteQueue = new RemoteStrokeQueue(this.remoteOpSink());
     this.collabClient = new CollabClient('http://localhost:3000', delegate);
@@ -170,14 +177,8 @@ export class PixiApp {
   private createCanvasApi(): CanvasApi {
     return {
       add: (stroke) => this.commit(stroke),
-      eraseLive: (removeIds, additions) => this.eraseLive(removeIds, additions),
-      eraseEnd: () => {
-        const txn = this.state.commitErase();
-        if (txn) {
-          for (const id of txn.removed) this.collabClient.sendStrokeDelete(id);
-          for (const stroke of txn.added) this.collabClient.sendStrokeCommit(stroke);
-        }
-      },
+      eraseTake: (ids) => this.eraseTake(ids),
+      eraseCommit: (sealed) => this.eraseCommit(sealed),
       strokesInFrame: (box, camera) => this.renderer.strokesInFrame(box, camera),
       pickColorAt: (frame, camera) => this.renderer.pickColorAt(frame, camera),
       fillTarget: (frame, camera, color) => this.renderer.fillTarget(frame, camera, color),
@@ -213,18 +214,22 @@ export class PixiApp {
     this.collabClient.sendStrokeCommit(stroke);
   }
 
-  private eraseLive(removeIds: readonly string[], additions: readonly BrushStroke[]): void {
-    log('state', 'eraseLive', {
-      removing: removeIds.length, adding: additions.length,
-      removeIds: removeIds.slice(0, 10), total: this.state.strokes.length,
-    });
-    this.state.liveErase(removeIds, additions);
-    for (const id of removeIds) {
-      this.renderer.removeStroke(id);
-    }
-    for (const stroke of additions) {
-      this.renderer.addStroke(stroke);
-    }
+  // Hides strokes an in-progress erase has adopted. No history and no broadcast: the gesture's
+  // surviving geometry is drawn by the tool's preview until it seals.
+  private eraseTake(ids: readonly string[]): void {
+    log('state', 'eraseTake', { count: ids.length, total: this.state.strokes.length });
+    this.state.liveErase(ids, []);
+    for (const id of ids) this.renderer.removeStroke(id);
+  }
+
+  // One undo step and one batched broadcast for the whole gesture.
+  private eraseCommit(sealed: SealedErase): void {
+    this.state.liveErase([], sealed.added);
+    for (const stroke of sealed.added) this.renderer.addStroke(stroke);
+    const txn = this.state.commitErase();
+    if (!txn) return;
+    log('state', 'erase committed', { removed: txn.removed.length, added: txn.added.length });
+    this.collabClient.sendStrokeBatch({ deletes: txn.removed, adds: txn.added });
   }
 
   private applyPick(color: Color): void {

@@ -12,6 +12,16 @@ import type { StrokePreview, Point, Color } from './stroke.js';
 import type { Layer } from './layer.js';
 import type { WireStroke, WireProject } from './wireStroke.js';
 
+/**
+ * One atomic multi-stroke edit. An eraser gesture deletes the strokes it touched and adds their
+ * remnants; sending those as hundreds of individual events is what stalled receiving peers, so
+ * the whole gesture crosses the wire — and the journal — as one message.
+ */
+export interface StrokeBatchPayload {
+  deletes: string[];
+  adds: WireStroke[];
+}
+
 /** A user connected to a drawing room. */
 export interface ConnectedUser {
   id: string;
@@ -97,6 +107,9 @@ export interface ServerToClientEvents {
   /** Another user recolored a set of strokes (paint-bucket on existing shapes). */
   'stroke:recolored': (payload: RecolorPayload) => void;
 
+  /** An atomic multi-stroke edit (eraser gesture). */
+  'stroke:batch': (payload: StrokeBatchPayload) => void;
+
   /** Layer list changed (add, remove, reorder, rename). */
   'layer:updated': (layers: Layer[]) => void;
 
@@ -141,6 +154,9 @@ export interface ClientToServerEvents {
 
   /** Recolor a set of strokes to one color (paint-bucket on existing shapes). */
   'stroke:recolor': (payload: RecolorPayload) => void;
+
+  /** An atomic multi-stroke edit (eraser gesture). */
+  'stroke:batch': (payload: StrokeBatchPayload) => void;
 
   /** Broadcast cursor position, frame-local to the sender's camera (throttled, ~30Hz). */
   'cursor:move': (position: CursorMovePayload) => void;

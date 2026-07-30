@@ -49,6 +49,8 @@ Format: `- [ ] [Phase/Task] Description — comment verifier`
 
 ## Phase 4 — Collaboration Hardening
 
+- [ ] [Task 20] Verifier qu'un geste de gomme traverse en un seul stroke:batch sur deux fenetres;
+      le pair ne bouge qu'au relachement; relever le longest-task DevTools.
 - [ ] [Task 21] Test reconnect reel : couper le reseau d'un client pendant une
       session collab, verifier le resync complet a la reconnexion
 - [ ] [Task 22] Mesures de perf reelles (INP, taille du journal) avant/apres,
