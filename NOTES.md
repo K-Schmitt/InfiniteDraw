@@ -144,13 +144,24 @@ render-placement mode transitions (`baked` → `frame` → `bleed`).
 camera.
 
 Root cause of the CASE 4 failures: `normaliseLevel`'s `HYSTERESIS` dead-band crosses a level
-upward only at `frac >= 1.05` but downward at `frac < -0.05`, so N unit-magnitude `zoomBy` calls in
-one direction cross one fewer level boundary than N calls in the other — a symmetric round trip
-ends one level off, with the missing crossing's pivot shift stranded in `sub` as ~200-unit drift
-(not sub-pixel). This reproduces at every nonzero tested level, not just the deep end, and is
-independent of the Q64 sub-cell erosion mechanism below. A full fix means touching
-`normaliseLevel`'s dead-band thresholds, which is locked-invariant camera code — out of scope for
-this task; carrying only the `carry()` divmod hardening was approved.
+upward only at `frac >= 1.05` but downward at `frac < -0.05`. That produces two distinct symptoms,
+not one:
+
+- **Negative levels (-20/-60/-120)**: the zoom-OUT leg (`cameraAt`) crosses a level on every call,
+  but the reversing zoom-IN leg under-crosses by exactly one level over N calls (a unit step only
+  reaches `frac` 1.0 on its first call, short of the 1.05 threshold needed to cross up). `back.level`
+  lands on `-1`, not `0` — a genuine level miscount.
+- **Positive levels (20/60/120)**: the zoom-IN leg (`cameraAt`) itself under-crosses by one level,
+  landing at `frac = 1`; the reversing zoom-OUT leg *also* under-crosses by one starting from that
+  `frac = 1` (its first call spends the leftover fraction without crossing). The two under-crossings
+  cancel, so `back.level` correctly lands on `0` — but the pivot-shift rescale that a real crossing
+  would apply never runs on either leg, leaving `sub` off by `pivotFx*0.5` / `pivotFy*0.5`
+  (~200/150 units for the pivot this suite uses): a sub-cell drift, not a level miscount.
+
+This reproduces at every nonzero tested level, not just the deep end, and is independent of the
+Q64 sub-cell erosion mechanism below. A full fix means touching `normaliseLevel`'s dead-band
+thresholds, which is locked-invariant camera code — out of scope for this task; carrying only the
+`carry()` divmod hardening was approved.
 
 Root cause of the deep zoom-out cases in general: `HierCamera`'s Q64 fixed-point sub-cell offset
 erodes one fractional bit per level crossing (`rescaleCell`'s `>>1`), so a round trip through more

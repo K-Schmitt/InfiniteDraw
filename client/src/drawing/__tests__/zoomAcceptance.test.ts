@@ -109,10 +109,18 @@ describe('CASE 3 — resolveFill is invariant under frameScale', () => {
 
 describe('CASE 4 — a symmetric zoom round trip returns the camera to its start', () => {
   for (const level of LEVELS) {
-    // Root cause (level !== 0): normaliseLevel's HYSTERESIS dead-band crosses a level upward only
-    // at frac >= 1.05 but downward at frac < -0.05, so N unit-magnitude zoom-ins cross one fewer
-    // level boundary than N zoom-outs (or vice-versa); a symmetric round trip ends one level off
-    // with the missing crossing's pivot shift stranded in `sub` as ~200-unit drift, not sub-pixel.
+    // Root cause (level !== 0) splits into two distinct symptoms, both from normaliseLevel's
+    // HYSTERESIS dead-band crossing up only at frac >= 1.05 but down at frac < -0.05:
+    // - Negative levels (-20/-60/-120): cameraAt's zoom-OUT leg crosses cleanly every call, but
+    //   the reversing zoom-IN leg under-crosses by exactly one level over N calls (a unit step
+    //   only reaches frac 1.0, short of the 1.05 threshold, on its first call). back.level lands
+    //   on -1, not 0 — a genuine level miscount.
+    // - Positive levels (20/60/120): cameraAt's zoom-IN leg itself under-crosses by one level,
+    //   landing at frac=1; the reversing zoom-OUT leg *also* under-crosses by one starting from
+    //   that frac=1 (its first call spends the leftover fraction without crossing). The two
+    //   under-crossings cancel, so back.level correctly lands on 0 — but the pivot-shift rescale
+    //   that a real crossing would apply never runs on either leg, leaving `sub` off by
+    //   pivotFx*0.5 / pivotFy*0.5 (~200/150 units): a sub-cell drift, not a level miscount.
     const runner = level === 0 ? it : it.fails;
     runner(`level ${level}`, () => {
       const camera = cameraAt(level);
