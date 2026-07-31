@@ -15,6 +15,7 @@ import type { StrokeBeginPayload } from '@shared/socket-events';
 import { CollabClient, type CollabDelegate } from '../network/CollabClient';
 import { RemoteStrokeQueue, type RemoteOpSink } from '../network/RemoteStrokeQueue';
 import { syncSnapshot } from '../network/snapshotSync';
+import { historyBroadcast } from '../network/historyBroadcast';
 import type { ProjCamera } from '../coords/viewProject';
 import { decodeCamera, writePermalink } from './cameraPermalink';
 import { log, logThrottled, installDebugApi, SESSION_ID } from '../debug/logger';
@@ -536,6 +537,21 @@ export class PixiApp {
       else if (instruction.action === 'remove') this.renderer.removeStroke(instruction.strokeId);
       else this.renderer.recolorStroke(instruction.strokeId, instruction.color);
     }
+    this.broadcastHistory(instructions);
+  }
+
+  // An undo/redo on a shared canvas is an edit like any other: peers and the journal have to see
+  // it, or the undone stroke stays on every other screen and comes straight back on reload.
+  private broadcastHistory(instructions: readonly RendererInstruction[]): void {
+    const ops = historyBroadcast(instructions);
+    if (ops.deletes.length > 0 || ops.adds.length > 0) {
+      // preserveOrder: a stroke coming back from history belongs in the slot it already held,
+      // not on top of everything drawn since it was undone.
+      this.collabClient.sendStrokeBatch({
+        deletes: ops.deletes, adds: ops.adds, preserveOrder: true,
+      });
+    }
+    for (const group of ops.recolors) this.collabClient.sendStrokeRecolor(group.ids, group.color);
   }
 
   private context(e: PointerEvent, rect: DOMRect): ToolContext {

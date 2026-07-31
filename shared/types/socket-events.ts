@@ -20,6 +20,12 @@ import type { WireStroke, WireProject } from './wireStroke.js';
 export interface StrokeBatchPayload {
   deletes: string[];
   adds: WireStroke[];
+  /**
+   * Restore each added stroke to the paint slot it already held instead of stacking it on top.
+   * Set by undo/redo, where a redone stroke belongs where it was; never by the eraser, whose
+   * remnants are new geometry. The server still validates every restored slot.
+   */
+  preserveOrder?: boolean;
 }
 
 /** A user connected to a drawing room. */

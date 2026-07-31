@@ -164,13 +164,17 @@ export class CollabClient {
   sendStrokeBatch(batch: {
     readonly deletes: readonly string[];
     readonly adds: readonly BrushStroke[];
+    /** Undo/redo re-add: the server restores each stroke's own paint slot instead of stacking. */
+    readonly preserveOrder?: boolean;
   }): void {
     log('net', 'OUT stroke:batch', {
-      deletes: batch.deletes.length, adds: batch.adds.length, connected: this.socket.connected,
+      deletes: batch.deletes.length, adds: batch.adds.length,
+      preserveOrder: batch.preserveOrder ?? false, connected: this.socket.connected,
     });
     this.socket.emit('stroke:batch', {
       deletes: [...batch.deletes],
       adds: batch.adds.map(toWireStroke),
+      ...(batch.preserveOrder ? { preserveOrder: true } : {}),
     });
   }
 

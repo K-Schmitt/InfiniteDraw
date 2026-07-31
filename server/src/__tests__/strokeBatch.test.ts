@@ -42,3 +42,43 @@ describe('applyBatchOrder', () => {
     expect(() => JSON.stringify(toWireStroke(result.strokes[0]!))).not.toThrow();
   });
 });
+
+/**
+ * A redone stroke must land back in the slot it already held. Stamping it with a fresh block
+ * would float it above everything drawn since the undo — visible as a shape jumping to the front
+ * of the stack after ctrl+Z, ctrl+Y.
+ */
+describe('applyBatchOrder with preserveOrder', () => {
+  function at(id: string, zIndex: number): BrushStroke {
+    return { ...stroke(id), zIndex };
+  }
+
+  it('keeps each stroke in the slot it already held', () => {
+    const result = applyBatchOrder([at('a', 2), at('b', 5)], {
+      nextZ: 9, ownerId: 'u1', preserveOrder: true,
+    });
+    expect(result.strokes.map((s) => s.zIndex)).toEqual([2, 5]);
+    expect(result.nextZ).toBe(9);
+  });
+
+  it('still stamps the owner rather than trusting the client', () => {
+    const incoming = { ...at('a', 2), ownerId: 'someone-else' };
+    const result = applyBatchOrder([incoming], { nextZ: 9, ownerId: 'u1', preserveOrder: true });
+    expect(result.strokes[0]!.ownerId).toBe('u1');
+  });
+
+  // The server hands out every zIndex it ever assigned below `nextZ`, so anything at or above it
+  // was never issued here — a stale, forged or corrupted value that must not steer paint order.
+  it('assigns a fresh slot to a zIndex this server never issued', () => {
+    const result = applyBatchOrder([at('a', 900), at('b', -1)], {
+      nextZ: 4, ownerId: 'u1', preserveOrder: true,
+    });
+    expect(result.strokes.map((s) => s.zIndex)).toEqual([4, 5]);
+    expect(result.nextZ).toBe(6);
+  });
+
+  it('leaves the eraser path assigning a fresh contiguous block', () => {
+    const result = applyBatchOrder([at('a', 2), at('b', 5)], { nextZ: 9, ownerId: 'u1' });
+    expect(result.strokes.map((s) => s.zIndex)).toEqual([9, 10]);
+  });
+});

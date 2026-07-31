@@ -203,6 +203,7 @@ export class CollabServer {
     const ordered = applyBatchOrder(incoming, {
       nextZ: this.nextZ,
       ownerId: socket.data.userId!,
+      preserveOrder: payload.preserveOrder === true,
     });
     this.nextZ = ordered.nextZ;
     for (const stroke of ordered.strokes) await this.room.addStroke(stroke);
