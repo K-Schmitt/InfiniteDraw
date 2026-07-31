@@ -6,13 +6,14 @@ import { strokeToRings } from './strokeToPath';
 import { fillRings } from './fillRings';
 import { pointInRings } from './hitTest';
 import { ringsAdjacent } from './ringsAdjacent';
-import { selectFillWalls, sameColor } from './fillWalls';
+import { sameColor } from './fillWalls';
 import { StrokeStore, type StrokeItem } from './StrokeStore';
 import {
   ringsToFrame, ringArea, frameBboxOf, cameraInsideStroke, localBboxToFrame,
 } from './projectRings';
 import { clipFrameRingsToView } from './clipFrameRings';
-import { decideFill, type FillCandidate } from './fillDecision';
+import type { FillCandidate } from './fillDecision';
+import { resolveFillTarget } from './fill/fillTarget';
 import { renderWallMask } from './fill/renderWallMask';
 import { resolveFill, type ResolvedFill } from './fill/resolveFill';
 import { paddedMaskLayout, maskFrameBox, maskSeedPx } from './fill/maskLayout';
@@ -243,16 +244,20 @@ export class StrokeRenderer {
    * of recoloring its parent. Falls back to recoloring the stroke under an open-area click.
    * Background fills are paint, never walls, so targeting is colour-independent — `_color` stays
    * only because the ToolApi passes the brush colour through.
+   *
+   * The rules themselves live in `resolveFillTarget`, which is pure and unit-tested; this method
+   * only supplies the visible candidates and the GPU-backed region resolver.
    */
   fillTarget(frame: Point, camera: ProjCamera, _color: Color): FillTargetResult | null {
     const projected = this.projectedInViewport(camera);
-    const walls = selectFillWalls(
-      projected.map((c) => ({ stroke: c.stroke, rings: c.frameRings })),
-    );
-    const region = this.regionAt(frame, walls, camera);
-    const decision = decideFill(frame, region, projected.map(toFillCandidate));
+    const decision = resolveFillTarget({
+      seed: frame,
+      candidates: projected.map(toFillCandidate),
+      regionFor: (walls) => this.regionAt(frame, walls, camera),
+    });
     log('geom', `fillTarget -> ${decision.kind}`, {
-      frame, walls: walls.length, ringCount: region?.length ?? 0, visible: projected.length,
+      frame, visible: projected.length,
+      ringCount: decision.kind === 'fill' ? decision.rings.length : 0,
     });
     if (decision.kind === 'fill') return { kind: 'fill', rings: decision.rings, background: true };
     if (decision.kind === 'recolorRegion') return { kind: 'recolor', ids: [decision.fillId] };
