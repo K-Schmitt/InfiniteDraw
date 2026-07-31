@@ -20,11 +20,20 @@ export function serveClient(app: Express, dir: string): boolean {
     log('life', 'client bundle absent — static serving disabled', { dir: root });
     return false;
   }
-  app.use(express.static(root, { maxAge: '1h', index: 'index.html' }));
+  // index: false — index.html must never be cached like a hashed asset (see below), so every
+  // request for it, including the "/" case express.static would otherwise auto-serve, falls
+  // through to the catch-all route instead.
+  app.use(express.static(root, { maxAge: '1h', index: false }));
   // WARNING: '*' is a catch-all — any Express route registered AFTER serveClient() runs (e.g. a
   // future REST endpoint) is unreachable, because this matches first. Mount API routes before
   // calling serveClient, or give them a prefix this catch-all is taught to skip.
-  app.get('*', (_req, res) => res.sendFile(join(root, 'index.html')));
+  app.get('*', (_req, res) => {
+    // index.html references content-hashed asset filenames, so caching it would pin clients to
+    // a stale bundle after every deploy until the cache expired — unlike the hashed assets
+    // above, it must always be revalidated.
+    res.set('Cache-Control', 'no-cache');
+    res.sendFile(join(root, 'index.html'));
+  });
   log('life', 'serving client bundle', { dir: root });
   return true;
 }

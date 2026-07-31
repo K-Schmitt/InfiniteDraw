@@ -36,4 +36,17 @@ describe('serveClient', () => {
       server.close();
     }
   });
+
+  it('never caches index.html, even for "/"', async () => {
+    const app = express();
+    serveClient(app, dir);
+    const server = app.listen(0);
+    const { port } = server.address() as AddressInfo;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/`);
+      expect(res.headers.get('cache-control')).toBe('no-cache');
+    } finally {
+      server.close();
+    }
+  });
 });
