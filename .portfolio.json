@@ -1,0 +1,7 @@
+{
+  "title": "InfinityBoard — Canvas Infini",
+  "description": "Canvas vectoriel infini et collaboratif : traits stockés en points + pression, zoom sans perte, synchronisation temps réel via WebSockets.",
+  "image": "assets/preview.png",
+  "status": "in-progress",
+  "links": "https://slackliniste.com/draw"
+}
