@@ -43,7 +43,7 @@ export class CollabServer {
       ServerToClientEvents,
       InterServerEvents,
       SocketData
-    >(httpServer, { cors: { origin: allowedOrigins() }, path: socketIoPath() });
+    >(httpServer, { cors: { origin: allowedOrigins() } });
 
     this.io.on('connection', (socket) => this.onConnection(socket));
   }
@@ -317,12 +317,6 @@ function allowedOrigins(): string[] | boolean {
   const configured = process.env['CLIENT_ORIGIN'];
   if (configured) return configured.split(',').map((o) => o.trim());
   return process.env['NODE_ENV'] === 'production' ? true : ['http://localhost:5173'];
-}
-
-// Mirrors client/vite.config.ts's `/draw/` production base: the Coolify reverse proxy only
-// forwards `/draw/*` to this container, so Socket.io must live under that prefix in prod too.
-function socketIoPath(): string {
-  return process.env['NODE_ENV'] === 'production' ? '/draw/socket.io/' : '/socket.io/';
 }
 
 function emptyProject(strokes: readonly BrushStroke[]): Project {
