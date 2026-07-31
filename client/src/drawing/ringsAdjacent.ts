@@ -3,7 +3,18 @@ import type { Point } from '@shared/stroke';
 import { distancePointToSegment } from './hitTest';
 import { frameForRings, mapPair, ringToPairs, type Pair } from './polyScale';
 
-const ADJACENT_TOL = 1; // normalized units (~1000 frame): shared edges are exact, gaps are large
+/**
+ * Raw camera-frame units, NOT normalized units — real "touching" geometry (a fill against its
+ * bounding outline, two facets either side of a wall) never lands bit-exact: the anchor
+ * frame<->local round-trip and the exact-stage's Douglas-Peucker simplification each leave a
+ * sub-unit residual. A fixed threshold in the [0,1000]-conditioned frame does NOT stay a fixed
+ * physical tolerance: `frameForRings`'s scale `k = 1000 / combinedExtent` shrinks as the pair's
+ * combined extent grows, so the identical physical gap reads as "adjacent" for two small shapes
+ * and "not adjacent" for two large ones — silently breaking the same-colour recolor group's BFS
+ * chain wherever it has to cross a large shape, which is exactly backwards: a real gap should be
+ * rejected regardless of scale, and a real touch should be accepted regardless of scale.
+ */
+const ADJACENT_TOL_PX = 1;
 
 /**
  * True if two strokes are adjacent — their areas overlap, OR their boundaries touch
@@ -21,16 +32,20 @@ export function ringsAdjacent(a: readonly number[][], b: readonly number[][]): b
   } catch {
     return false;
   }
-  return minBoundaryDistance(am, bm) <= ADJACENT_TOL;
+  // Convert back to raw units before comparing — the conditioning frame is for polygon-clipping's
+  // numerical stability only, the adjacency tolerance itself must stay scale-invariant.
+  return minBoundaryDistance(am, bm, ADJACENT_TOL_PX * frame.k) / frame.k <= ADJACENT_TOL_PX;
 }
 
-function minBoundaryDistance(a: Pair[][], b: Pair[][]): number {
+/** `earlyExitNormalized` is the raw-unit tolerance pre-scaled into the same conditioned space
+ *  as `a`/`b`, so the early exit can stop scanning as soon as the answer is already decided. */
+function minBoundaryDistance(a: Pair[][], b: Pair[][], earlyExitNormalized: number): number {
   let min = Infinity;
   const scan = (rings: Pair[][], other: Pair[][]): boolean => {
     for (const ring of rings) {
       for (const [x, y] of ring) {
         min = Math.min(min, distanceToRings({ x, y }, other));
-        if (min <= ADJACENT_TOL) return true;
+        if (min <= earlyExitNormalized) return true;
       }
     }
     return false;

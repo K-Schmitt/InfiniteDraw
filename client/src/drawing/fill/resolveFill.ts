@@ -3,23 +3,30 @@ import { boundingWallIndices } from './boundingWalls';
 import { exactRegionAt } from './exactRegion';
 import { floodRegion } from './floodRegion';
 import type { PixelBuffer, RegionMask } from './maskBuffer';
+import { maskPxToFrame, type MaskOrigin } from './maskLayout';
 import { fitVertexBudget } from './simplifyRing';
 import { groupRings, traceMask, type TracedRegion } from './traceMask';
 
 /** Douglas-Peucker tolerance in screen pixels for the raster fallback contour. */
 const TRACE_TOLERANCE_PX = 1;
 
+/** Unpadded buffer: pixel (0,0) is the viewport's top-left, the frame origin. */
+const VIEWPORT_ORIGIN: MaskOrigin = { x: 0, y: 0 };
+
 export interface FillPixelSource {
   readonly buffer: PixelBuffer;
-  /** Frame rings of the walls, indexed exactly as they were painted into `buffer`. */
+  /** ORIGINAL (unclipped) frame rings of the walls, indexed exactly as painted into `buffer`. */
   readonly wallRings: readonly number[][][];
 }
 
 export interface ResolveFillRequest {
   readonly source: FillPixelSource;
+  /** Seed in BUFFER pixels (screen px minus `originPx`). */
   readonly seedPx: { readonly x: number; readonly y: number };
   /** Screen pixels per camera-frame unit — converts the traced contour back to frame units. */
   readonly frameScale: number;
+  /** Screen-px position of buffer pixel (0,0). Omitted = buffer starts at the frame origin. */
+  readonly originPx?: MaskOrigin;
 }
 
 export interface ResolvedFill {
@@ -48,7 +55,7 @@ export function resolveFill(request: ResolveFillRequest): ResolvedFill | null {
     return null;
   }
   const wallIndices = boundingWallIndices(mask, request.source.buffer);
-  const traced = frameRegion(mask, request.frameScale);
+  const traced = frameRegion(mask, request.frameScale, request.originPx ?? VIEWPORT_ORIGIN);
   if (!traced) return null;
   const exact = tryExact(request, wallIndices, traced);
   // The budget is a wire-size guarantee, so it has to bind on the path that normally wins too —
@@ -68,15 +75,19 @@ export function resolveFill(request: ResolveFillRequest): ResolvedFill | null {
 }
 
 /** Traced, simplified, budget-fitted contour of the mask, converted to camera-frame units. */
-function frameRegion(mask: RegionMask, frameScale: number): TracedRegion | null {
+function frameRegion(
+  mask: RegionMask,
+  frameScale: number,
+  originPx: MaskOrigin,
+): TracedRegion | null {
   // A 4-connected flood has exactly one outer ring, so there is nothing to choose between —
   // and ranking by `outer.length` would rank by vertex count, not area, if there ever were.
   const largest = groupRings(traceMask(mask))[0];
   if (!largest) return null;
   const fitted = fitVertexBudget(largest, TRACE_TOLERANCE_PX);
   return {
-    outer: scaleRing(fitted.outer, frameScale),
-    holes: fitted.holes.map((h) => scaleRing(h, frameScale)),
+    outer: maskPxToFrame(fitted.outer, frameScale, originPx),
+    holes: fitted.holes.map((h) => maskPxToFrame(h, frameScale, originPx)),
   };
 }
 
@@ -98,9 +109,10 @@ function tryExact(
   const bbox = ringBbox(traced.outer);
   const walls = wallsFor(request.source.wallRings, wallIndices, bbox);
   if (walls.length === 0) return null;
+  const origin = request.originPx ?? VIEWPORT_ORIGIN;
   const seed = {
-    x: request.seedPx.x / request.frameScale,
-    y: request.seedPx.y / request.frameScale,
+    x: (request.seedPx.x + origin.x) / request.frameScale,
+    y: (request.seedPx.y + origin.y) / request.frameScale,
   };
   return exactRegionAt({ seed, walls, hint: bbox });
 }
@@ -122,13 +134,6 @@ function wallsFor(
 
 function overlaps(a: RegionHintBox, b: RegionHintBox): boolean {
   return a.minX <= b.maxX && a.maxX >= b.minX && a.minY <= b.maxY && a.maxY >= b.minY;
-}
-
-/** Pixel coords → camera-frame units. Frame (0,0) is the viewport's top-left corner. */
-function scaleRing(ring: readonly number[], frameScale: number): number[] {
-  const out = new Array<number>(ring.length);
-  for (let i = 0; i < ring.length; i++) out[i] = ring[i]! / frameScale;
-  return out;
 }
 
 interface RegionHintBox {

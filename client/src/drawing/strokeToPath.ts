@@ -3,6 +3,7 @@ import polygonClipping from 'polygon-clipping';
 import type { BrushStroke, Point } from '@shared/stroke';
 import { StrokeType } from '@shared/stroke';
 import { strokeOutlineRings } from './outlineStroke';
+import { log } from '../debug/logger';
 
 const STROKE_OPTIONS = {
   thinning: 0.5,
@@ -83,7 +84,16 @@ export function strokeToRings(stroke: BrushStroke): number[][] {
   let result;
   try {
     result = polygonClipping.union([[ring]]);
-  } catch {
+  } catch (err) {
+    // Same known polygon-clipping failure as `eraserStamp`/`subtractStamp` ("Unable to complete
+    // output ring") — logged for the same reason: silently returning the raw self-intersecting
+    // outline still renders, so the only trace this path was taken used to be a stroke whose
+    // overlaps stopped resolving. Falling back stays the right behaviour; being silent did not.
+    log('error', 'polygon-clipping union FAILED (strokeToRings)', {
+      message: err instanceof Error ? err.message : String(err),
+      id: stroke.id, type: stroke.type, size: stroke.size,
+      points: stroke.points.length, outlineVertices: ring.length,
+    });
     return [outline]; // degenerate geometry — fall back to the raw outline
   }
 

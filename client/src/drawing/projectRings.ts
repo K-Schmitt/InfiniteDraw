@@ -1,6 +1,6 @@
 import type { Point } from '@shared/stroke';
 import { LOCAL_SPAN_N, type CellAnchor } from '@shared/anchor';
-import { projectToFrame, CULLED, type ProjCamera } from '../coords/viewProject';
+import { projectToFrame, CULLED, MAX_EXACT_GAP, type ProjCamera } from '../coords/viewProject';
 import { ldexp } from '../coords/ldexp';
 import { pointInRings } from './hitTest';
 
@@ -90,13 +90,39 @@ export interface StrokeGeometry {
 export function cameraLocalPoint(anchor: CellAnchor, camera: ProjCamera): Point | null {
   const gap = camera.level - anchor.level;
   if (gap < 0) return null;
-  const g = BigInt(gap);
-  const intX = (camera.cell.x * LOCAL_SPAN_N) >> g;
-  const intY = (camera.cell.y * LOCAL_SPAN_N) >> g;
   return {
-    x: Number(intX - anchor.cell.x * LOCAL_SPAN_N) + ldexp(camera.sub.x, -gap),
-    y: Number(intY - anchor.cell.y * LOCAL_SPAN_N) + ldexp(camera.sub.y, -gap),
+    x: localAxis({ cell: camera.cell.x, sub: camera.sub.x, anchorCell: anchor.cell.x }, gap),
+    y: localAxis({ cell: camera.cell.y, sub: camera.sub.y, anchorCell: anchor.cell.y }, gap),
   };
+}
+
+interface CameraAxis {
+  readonly cell: bigint;
+  readonly sub: number;
+  readonly anchorCell: bigint;
+}
+
+/**
+ * One axis of the camera origin in anchor-local units: (cell·SPAN + sub)/2^gap − anchorCell·SPAN.
+ *
+ * The shift is split into quotient + remainder rather than left as `(cell·SPAN) >> gap`: that
+ * shift alone drops up to 2^gap − 1 camera units, i.e. up to a whole anchor-local unit, and
+ * always downward. Dropped integer bits, not a float limit — and this is the probe that decides
+ * whether the camera stands on a coarse stroke's ink, so any painted band thinner than one anchor
+ * unit could read the wrong side of itself (a 4-unit wall lost a quarter of its width).
+ */
+function localAxis(axis: CameraAxis, gap: number): number {
+  const units = axis.cell * LOCAL_SPAN_N;
+  const whole = units >> BigInt(gap); // arithmetic shift = floor, so the remainder stays positive
+  return Number(whole - axis.anchorCell * LOCAL_SPAN_N)
+    + fractionOf(units - (whole << BigInt(gap)), gap)
+    + ldexp(axis.sub, -gap);
+}
+
+/** `r / 2^gap` for r in [0, 2^gap) — keeps the top 53 bits so `Number(r)` cannot reach Infinity. */
+function fractionOf(r: bigint, gap: number): number {
+  if (gap <= MAX_EXACT_GAP) return ldexp(Number(r), -gap);
+  return ldexp(Number(r >> BigInt(gap - MAX_EXACT_GAP)), -MAX_EXACT_GAP); // rest is sub-ULP of 1
 }
 
 /**

@@ -3,7 +3,7 @@ import { StrokeType, type BrushStroke } from '@shared/stroke';
 import { LOCAL_SPAN_N, originBbox, type CellAnchor } from '@shared/anchor';
 import type { ProjCamera } from '../../coords/viewProject';
 import { strokeToRings } from '../strokeToPath';
-import { cameraInsideStroke, localBoundsOf } from '../projectRings';
+import { cameraInsideStroke, cameraLocalPoint, localBoundsOf } from '../projectRings';
 
 const ANCHOR: CellAnchor = { level: 0, cell: { x: 0n, y: 0n } };
 
@@ -29,8 +29,9 @@ function strokeOf(overrides: Partial<BrushStroke>): BrushStroke {
 }
 
 /** A closed 400×400 rectangle outline at local (100,100)–(500,500): rings 98–502 / 102–498. */
-function closedRectangle(): BrushStroke {
+function closedRectangle(size = 4): BrushStroke {
   return strokeOf({
+    size,
     points: [
       { x: 100, y: 100 }, { x: 500, y: 100 }, { x: 500, y: 500 },
       { x: 100, y: 500 }, { x: 100, y: 100 },
@@ -49,17 +50,26 @@ function filledSquare(): BrushStroke {
 }
 
 /**
- * A camera sitting at anchor-local (x, y), `gap` levels finer than ANCHOR. `x` and `y` must be
- * multiples of 2**(16-gap) so the cell division is exact and the probe lands on the point asked
- * for — every coordinate used below is.
+ * A camera sitting at anchor-local (x, y), `gap` levels finer than ANCHOR. Exact for any x, y on
+ * a quarter-unit grid (with gap >= 2). Fractional placements are the interesting ones: past
+ * gap 16 the sub-unit part of the position lives entirely in the BigInt cell, exactly where the
+ * probe used to shift it away.
  */
 function cameraAtLocal(x: number, y: number, gap: number): ProjCamera {
-  const g = BigInt(gap);
+  const ax = axisAt(x, gap);
+  const ay = axisAt(y, gap);
   return {
     level: ANCHOR.level + gap,
-    cell: { x: (BigInt(x) << g) / LOCAL_SPAN_N, y: (BigInt(y) << g) / LOCAL_SPAN_N },
-    sub: { x: 0, y: 0 },
+    cell: { x: ax.cell, y: ay.cell },
+    sub: { x: ax.sub, y: ay.sub },
   };
+}
+
+/** Anchor-local coordinate → the exact camera cell + sub-cell offset that sits on it. */
+function axisAt(local: number, gap: number): { cell: bigint; sub: number } {
+  const units = (BigInt(local * 4) << BigInt(gap)) / 4n; // camera-level units
+  const cell = units / LOCAL_SPAN_N;
+  return { cell, sub: Number(units - cell * LOCAL_SPAN_N) };
 }
 
 function geometryOf(stroke: BrushStroke): { bounds: ReturnType<typeof localBoundsOf>; rings: number[][] } {
@@ -103,9 +113,42 @@ describe('cameraInsideStroke', () => {
     });
   }
 
+  // A 5-unit pen puts the band's inner edge at 497.5, off the unit grid. Quantizing the probe to
+  // whole anchor units reads 497 — the hollow — so the renderer hid a stroke the camera stands on.
+  for (const gap of [20, 44, 60]) {
+    it(`is true just inside a band edge that is off the unit grid (gap ${gap})`, () => {
+      const { bounds, rings } = geometryOf(closedRectangle(5));
+      const camera = cameraAtLocal(497.75, 300, gap);
+      expect(cameraInsideStroke({ bounds, rings }, ANCHOR, camera)).toBe(true);
+    });
+  }
+
+  it('stays false just outside that same edge', () => {
+    const { bounds, rings } = geometryOf(closedRectangle(5));
+    const camera = cameraAtLocal(497.25, 300, 44);
+    expect(cameraInsideStroke({ bounds, rings }, ANCHOR, camera)).toBe(false);
+  });
+
   it('is false when the stroke is finer than the camera', () => {
     const { bounds, rings } = geometryOf(filledSquare());
     const finerAnchor: CellAnchor = { level: 5, cell: { x: 0n, y: 0n } };
     expect(cameraInsideStroke({ bounds, rings }, finerAnchor, cameraAtLocal(300, 300, 0))).toBe(false);
+  });
+});
+
+describe('cameraLocalPoint', () => {
+  // Past gap 16 the camera cell alone carries sub-unit position (LOCAL_SPAN is 2**16), so
+  // shifting it right before folding `sub` in threw the fraction away — up to a whole unit.
+  for (const gap of [2, 16, 20, 44, 60, 200]) {
+    it(`keeps the sub-unit part of the camera position (gap ${gap})`, () => {
+      const p = cameraLocalPoint(ANCHOR, cameraAtLocal(498.75, 300.25, gap));
+      expect(p!.x).toBeCloseTo(498.75, 6);
+      expect(p!.y).toBeCloseTo(300.25, 6);
+    });
+  }
+
+  it('is null when the anchor is finer than the camera', () => {
+    const finer: CellAnchor = { level: 5, cell: { x: 0n, y: 0n } };
+    expect(cameraLocalPoint(finer, cameraAtLocal(300, 300, 0))).toBeNull();
   });
 });

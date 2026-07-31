@@ -1,6 +1,7 @@
 import { Container, Graphics, RenderTexture, type Renderer } from 'pixi.js';
 import { fillRings } from '../fillRings';
 import type { PixelBuffer } from './maskBuffer';
+import { ringToMaskPx, type MaskOrigin } from './maskLayout';
 
 /** One bounding stroke, rings already projected into the camera frame. */
 export interface WallShape {
@@ -14,6 +15,8 @@ export interface WallMaskView {
   readonly frameScale: number;
   /** Extra wall thickness in pixels; closes hand-drawn gaps up to this width. */
   readonly gapPx: number;
+  /** Screen-px position of buffer pixel (0,0) — negative when the mask is padded. */
+  readonly originPx: MaskOrigin;
 }
 
 export interface WallMaskRequest {
@@ -70,7 +73,7 @@ interface WallPen {
 function wallGraphics(wall: WallShape, index: number, view: WallMaskView): Graphics {
   const gfx = new Graphics();
   const color = index + INDEX_OFFSET;
-  const scaled = wall.frameRings.map((r) => scaleRing(r, view.frameScale));
+  const scaled = wall.frameRings.map((r) => ringToMaskPx(r, view.frameScale, view.originPx));
   fillRings(gfx, scaled, { originX: 0, originY: 0, scale: 1, color, alpha: 1 });
   if (view.gapPx > 0) outlineRings(gfx, scaled, { color, width: view.gapPx });
   return gfx;
@@ -83,11 +86,4 @@ function outlineRings(gfx: Graphics, rings: readonly number[][], pen: WallPen): 
     gfx.poly(points, true);
   }
   gfx.stroke({ color: pen.color, alpha: 1, width: pen.width, join: 'round', cap: 'round' });
-}
-
-/** Camera-frame ring → screen pixels. Frame (0,0) is the top-left of the viewport. */
-function scaleRing(ring: readonly number[], frameScale: number): number[] {
-  const out = new Array<number>(ring.length);
-  for (let i = 0; i < ring.length; i++) out[i] = ring[i]! * frameScale;
-  return out;
 }

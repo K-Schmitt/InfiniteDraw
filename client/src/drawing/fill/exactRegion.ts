@@ -43,10 +43,11 @@ export function exactRegionAt(request: ExactRegionRequest): number[][] | null {
   const frame = frameForRings([box, ...polys.flat()]);
   if (!frame) return null;
   const solid = polys.map((rings) => rings.map((r) => r.map((p) => mapPair(p, frame))));
-  const empty = safeDifference(box.map((p) => mapPair(p, frame)), solid);
+  const mappedBox = box.map((p) => mapPair(p, frame));
+  const empty = safeDifference(mappedBox, solid);
   if (!empty) return null;
   const seed = mapPair([request.seed.x, request.seed.y], frame);
-  const face = pickFace(seed, empty);
+  const face = pickFace(seed, empty, boxBounds(mappedBox));
   return face ? face.map((ring) => unmapRing(ring, frame)) : null;
 }
 
@@ -69,31 +70,56 @@ function safeDifference(box: Pair[], solid: Pair[][][]): Pair[][][] | null {
   }
 }
 
-/** Normalized coordinates run in [0,1000]; a face vertex this close to the edge is on the box. */
+/** Mapped coordinates span at most [0,1000]; a face vertex this close to a box edge is on it. */
 const BOX_EPS = 1e-4;
-/** Upper bound of `polyScale`'s normalized range. */
-const BOX_SPAN = 1000;
+
+interface MappedBoxBounds {
+  readonly minX: number;
+  readonly minY: number;
+  readonly maxX: number;
+  readonly maxY: number;
+}
+
+/**
+ * The frame normalizes the working box UNION the walls, so the box edges land on 0/1000 only
+ * when every wall is inside the box and the combined bbox is square. Any wall thicker than the
+ * padding or longer than the region pulls the box edges strictly inside (0,1000) — a fixed-span
+ * guard is then silently dead. Test faces against the box's own mapped coordinates instead.
+ */
+function boxBounds(mappedBox: readonly Pair[]): MappedBoxBounds {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [x, y] of mappedBox) {
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  }
+  return { minX, minY, maxX, maxY };
+}
 
 /**
  * The empty face containing the seed, excluding its own holes — and never a face that runs out to
  * the artificial working box. That rejection is what the old `enclosedRegionAt.touchesBoundary`
  * did: without it, any wall set that fails to close (a hand-drawn gap the raster stage sealed with
- * `FILL_GAP_PX`, a degenerate ring, an occluded wall) yields the padded bbox itself, returned with
+ * `FILL_GAP_PX`, a degenerate ring, an occluded wall) yields a box-clipped face, returned with
  * `exact: true` and no fallback log.
  */
-function pickFace(seed: Pair, faces: Pair[][][]): Pair[][] | null {
+function pickFace(seed: Pair, faces: Pair[][][], bounds: MappedBoxBounds): Pair[][] | null {
   for (const face of faces) {
     if (!insideRing(seed, face[0]!)) continue;
     if (face.slice(1).some((hole) => insideRing(seed, hole))) continue;
-    return touchesBox(face[0]!) ? null : face;
+    return touchesBox(face[0]!, bounds) ? null : face;
   }
   return null;
 }
 
-function touchesBox(ring: Pair[]): boolean {
+function touchesBox(ring: Pair[], bounds: MappedBoxBounds): boolean {
   for (const [x, y] of ring) {
-    if (x <= BOX_EPS || x >= BOX_SPAN - BOX_EPS) return true;
-    if (y <= BOX_EPS || y >= BOX_SPAN - BOX_EPS) return true;
+    if (x <= bounds.minX + BOX_EPS || x >= bounds.maxX - BOX_EPS) return true;
+    if (y <= bounds.minY + BOX_EPS || y >= bounds.maxY - BOX_EPS) return true;
   }
   return false;
 }

@@ -11,9 +11,12 @@ import { StrokeStore, type StrokeItem } from './StrokeStore';
 import {
   ringsToFrame, ringArea, frameBboxOf, cameraInsideStroke, localBboxToFrame,
 } from './projectRings';
+import { clipFrameRingsToView } from './clipFrameRings';
 import { decideFill, type FillCandidate } from './fillDecision';
 import { renderWallMask } from './fill/renderWallMask';
 import { resolveFill, type ResolvedFill } from './fill/resolveFill';
+import { paddedMaskLayout, maskFrameBox, maskSeedPx } from './fill/maskLayout';
+import { prepareMaskWalls } from './fill/prepareMaskWalls';
 import { log, logThrottled } from '../debug/logger';
 import type { ExportSource } from '../export/exportScope';
 
@@ -27,15 +30,22 @@ const MAX_SCREEN_STROKE_WIDTH = 2e34;
 // transform stays sub-pixel, avoiding a per-frame re-bake of every stroke at normal zoom.
 const FRAME_REBAKE_GAP = 2;
 // Max on-screen span (px) a stroke may cover before its frame geometry outruns float32's 24-bit
-// mantissa (2^22 ≈ 4M px keeps rasterisation sub-pixel). Past it, bleed instead of baking.
+// mantissa (2^22 ≈ 4M px keeps rasterisation sub-pixel). Past it, clip to the view instead of
+// baking the whole thing.
 const FRAME_MAX_SCREEN_SPAN = 2 ** 22;
+// Projecting a coarse stroke's vertex into the frame sums two terms of magnitude
+// |localCoord|·anchorScale px that cancel down to a viewport-sized result, so each projected
+// coordinate carries about that magnitude × 2^-52 of rounding error. Past this the clipped
+// outline would land more than a pixel off and clipping is worse than useless — `placeCulled`'s
+// probe stays exact at any depth (BigInt cell arithmetic), so it takes over there.
+const CLIP_MAX_ANCHOR_OFFSET = 2 ** 50;
 // background fills sort below every real stroke so outlines stay visible on top (Bug 1 fix)
 const BG_ORDER = 1e9;
 // Wall thickening, in screen px, applied when building the fill mask. Seals the sub-pixel gaps
 // a hand-drawn "closed" shape always has, without visibly shrinking the filled region.
 const FILL_GAP_PX = 2;
 
-type RenderMode = 'baked' | 'bleed' | 'frame';
+type RenderMode = 'baked' | 'bleed' | 'frame' | 'clip';
 
 export type FillTargetResult =
   | { kind: 'fill'; rings: number[][]; background: boolean }
@@ -231,12 +241,13 @@ export class StrokeRenderer {
    * Paint-bucket target. Region-first: an enclosed region under the cursor wins over any stroke
    * covering it, so a shape drawn *inside* an already-filled shape fills its own interior instead
    * of recoloring its parent. Falls back to recoloring the stroke under an open-area click.
+   * Background fills are paint, never walls, so targeting is colour-independent — `_color` stays
+   * only because the ToolApi passes the brush colour through.
    */
-  fillTarget(frame: Point, camera: ProjCamera, color: Color): FillTargetResult | null {
+  fillTarget(frame: Point, camera: ProjCamera, _color: Color): FillTargetResult | null {
     const projected = this.projectedInViewport(camera);
     const walls = selectFillWalls(
       projected.map((c) => ({ stroke: c.stroke, rings: c.frameRings })),
-      color,
     );
     const region = this.regionAt(frame, walls, camera);
     const decision = decideFill(frame, region, projected.map(toFillCandidate));
@@ -270,27 +281,37 @@ export class StrokeRenderer {
       ?? null;
   }
 
+  // The mask is padded half a viewport per side (matching `viewportFrameBox`'s wall selection),
+  // so an enclosing wall just off-screen still bounds the flood. Oversized walls are clipped to
+  // the padded box before painting — the same float32 guard the render path applies — but the
+  // exact stage gets the ORIGINAL rings: it is float64 with its own conditioning, and clipped
+  // walls would fabricate edges at the clip boundary.
   private resolveAt(
     frame: Point,
     walls: readonly number[][][],
     view: { readonly frameScale: number; readonly gapPx: number },
   ): ResolvedFill | null {
+    const layout = paddedMaskLayout(this.screenW, this.screenH);
+    const prepared = prepareMaskWalls(walls, {
+      box: maskFrameBox(layout, view.frameScale),
+      frameScale: view.frameScale,
+      maxScreenSpanPx: FRAME_MAX_SCREEN_SPAN,
+    });
     const buffer = renderWallMask({
       renderer: this.pixi,
-      walls: walls.map((rings) => ({ frameRings: rings })),
+      walls: prepared.map((rings) => ({ frameRings: rings })),
       view: {
-        width: Math.ceil(this.screenW),
-        height: Math.ceil(this.screenH),
+        width: layout.width,
+        height: layout.height,
         frameScale: view.frameScale,
         gapPx: view.gapPx,
+        originPx: layout.originPx,
       },
     });
     return resolveFill({
       source: { buffer, wallRings: walls },
-      seedPx: {
-        x: Math.round(frame.x * view.frameScale),
-        y: Math.round(frame.y * view.frameScale),
-      },
+      seedPx: maskSeedPx({ frame, frameScale: view.frameScale, originPx: layout.originPx }),
+      originPx: layout.originPx,
       frameScale: view.frameScale,
     });
   }
@@ -383,7 +404,7 @@ export class StrokeRenderer {
       count++;
     }
     const dt = performance.now() - t0;
-    const census = { baked: 0, frame: 0, bleed: 0, hidden: 0 };
+    const census = { baked: 0, frame: 0, bleed: 0, clip: 0, hidden: 0 };
     for (const p of this.placements.values()) {
       if (!p.gfx.visible) census.hidden++;
       else census[p.mode]++;
@@ -410,10 +431,14 @@ export class StrokeRenderer {
     if (camera.level - item.stroke.anchor.level > FRAME_REBAKE_GAP) {
       // Frame geometry stays float32-renderable only while the stroke's on-screen span fits the
       // 24-bit mantissa. Once you are zoomed so far in that its span exceeds that, its far
-      // vertices overflow and rasterisation breaks — but at that depth the camera sits inside the
-      // stroke, so hand off to the §4 bleed (fill viewport) / hide decision instead of baking it.
+      // vertices overflow and rasterisation breaks — so clip it to the viewport first and bake
+      // what is left, which is viewport-sized by construction. Only when the projection itself is
+      // too lossy to clip against does the §4 bleed (fill viewport) / hide decision take over.
       if (spanOf(item.ringBounds) * scale > FRAME_MAX_SCREEN_SPAN) {
-        return this.placeCulled(item, p, camera);
+        if (offsetOf(item.ringBounds) * scale > CLIP_MAX_ANCHOR_OFFSET) {
+          return this.placeCulled(item, p, camera);
+        }
+        return this.placeClipped(item, p, camera, frameScale);
       }
       return this.placeInFrame(item, p, camera, frameScale);
     }
@@ -444,9 +469,51 @@ export class StrokeRenderer {
     p.gfx.visible = true;
   }
 
+  /**
+   * A stroke too large to bake still covers only *part* of the viewport whenever its painted edge
+   * crosses the screen — the case `placeCulled`'s single probe point cannot express. Clipping the
+   * frame rings to the visible box answers it exactly: full box when the camera is inside solid
+   * ink (what `bleed` approximated), empty when it is in a hollow, and the real shape in between.
+   * The clipped geometry is viewport-sized, so baking it is float32-safe again.
+   */
+  private placeClipped(
+    item: StrokeItem, p: Placement, camera: ProjCamera, frameScale: number,
+  ): void {
+    const view = this.frameViewBox(frameScale);
+    const bbox = localBboxToFrame(item.stroke.anchor, item.ringBounds, camera);
+    if (!bbox) return this.placeCulled(item, p, camera);
+    // O(1) reject first: clipping is polygon-clipping work, and at deep zoom most strokes are
+    // oversized *and* off-screen. Only what actually reaches the viewport pays for a clip.
+    if (!bboxOverlap(bbox, view)) { p.gfx.visible = false; return; }
+    const frameRings = ringsToFrame(item.stroke.anchor, item.rings, camera);
+    const clipped = frameRings && clipFrameRingsToView(frameRings, view);
+    if (!clipped) return this.placeCulled(item, p, camera); // unprojectable or clip failed
+    if (clipped.length === 0) { p.gfx.visible = false; return; }
+    if (p.mode !== 'clip') {
+      log('render', 'mode -> clip (oversized stroke clipped to view)', {
+        id: item.stroke.id, from: p.mode, anchorLevel: item.stroke.anchor.level,
+        cameraLevel: camera.level,
+      });
+    }
+    p.mode = 'clip';
+    p.gfx.clear();
+    fillRings(p.gfx, clipped, fillOptions(item.stroke));
+    p.gfx.position.set(0, 0);
+    p.gfx.scale.set(frameScale);
+    p.gfx.visible = true;
+  }
+
+  /** The visible box in camera-frame units, padded by one viewport on each side. */
+  private frameViewBox(frameScale: number): FrameBounds {
+    const w = this.screenW / frameScale;
+    const h = this.screenH / frameScale;
+    return { minX: -w, minY: -h, maxX: 2 * w, maxY: 2 * h };
+  }
+
   // camera outside → hide; camera over a much-coarser stroke's painted area → bleed a viewport
   // fill (§4). "Painted area", not bounding box: the hollow centre of a closed shape must stay
-  // empty however deep you zoom into it.
+  // empty however deep you zoom into it. Reached only when the geometry cannot be clipped: the
+  // whole-viewport answer is a guess, and it is wrong for any stroke whose edge crosses the view.
   private placeCulled(item: StrokeItem, p: Placement, camera: ProjCamera): void {
     const geometry = { bounds: item.ringBounds, rings: item.rings };
     const inside = cameraInsideStroke(geometry, item.stroke.anchor, camera);
@@ -496,6 +563,11 @@ function toFillCandidate(c: GroupCandidate): FillCandidate {
 /** Larger of a stroke's local bbox dimensions — its on-screen span is this × anchor scale. */
 function spanOf(b: FrameBounds): number {
   return Math.max(b.maxX - b.minX, b.maxY - b.minY);
+}
+
+/** Farthest a vertex sits from its anchor origin — the term that cancels when projecting. */
+function offsetOf(b: FrameBounds): number {
+  return Math.max(Math.abs(b.minX), Math.abs(b.maxX), Math.abs(b.minY), Math.abs(b.maxY));
 }
 
 // filled regions have area, not a stroke width — cull those by projection only, not by diameter

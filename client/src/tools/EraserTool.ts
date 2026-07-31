@@ -4,6 +4,7 @@ import type { ProjCamera } from '../coords/viewProject';
 import type { HierCamera } from '../app/HierCamera';
 import { frameScaleOf } from '../coords/viewScale';
 import { eraserStamp } from '../drawing/eraseGeometry';
+import { fillRings } from '../drawing/fillRings';
 import { EraserSession } from './EraserSession';
 import type { Tool, ToolContext, ToolSettings, CanvasApi, FrameBox } from './Tool';
 import { log } from '../debug/logger';
@@ -72,15 +73,25 @@ export class EraserTool implements Tool {
     this.preview.clear();
   }
 
-  /** Draws the eraser cursor plus the gesture's surviving geometry (nothing is committed yet). */
+  /**
+   * Draws the eraser cursor plus the gesture's surviving geometry (nothing is committed yet).
+   *
+   * Goes through `fillRings`, not `poly()` + `fill()`: a carved piece is `[outer, ...holes]`, and
+   * only `fillRings`' `new GraphicsPath(undefined, true)` runs pixi's hole pass. Filled on the
+   * Graphics' own implicit path (signed = false) every hole rendered solid, so a closed shape's
+   * interior went opaque the instant the eraser touched it and hollow again on release. Same trap
+   * `renderWallMask.ts:62-69` documents for the fill mask.
+   */
   refreshPreview(camera: HierCamera): void {
     this.preview.clear();
     for (const shape of this.session?.workingRings() ?? []) {
-      for (const ring of shape.rings) {
-        const screen = toScreen(ring, camera);
-        if (screen.length >= 6) this.preview.poly(screen, true);
-      }
-      this.preview.fill({ color: rgb(shape.color), alpha: shape.color.a / 255 });
+      fillRings(this.preview, shape.rings, {
+        originX: 0,
+        originY: 0,
+        scale: camera.frameScale, // frame units → screen px, same factor as frameToScreen
+        color: rgb(shape.color),
+        alpha: shape.color.a / 255,
+      });
     }
     if (!this.cursor) return;
     const s = camera.frameToScreen(this.cursor.x, this.cursor.y);
@@ -140,16 +151,6 @@ export class EraserTool implements Tool {
 /** Level or cell change = a different frame origin. Sub-cell motion is not drift. */
 function drifted(a: ProjCamera, b: ProjCamera): boolean {
   return a.level !== b.level || a.cell.x !== b.cell.x || a.cell.y !== b.cell.y;
-}
-
-function toScreen(ring: readonly number[], camera: HierCamera): number[] {
-  const out = new Array<number>(ring.length);
-  for (let i = 0; i < ring.length; i += 2) {
-    const s = camera.frameToScreen(ring[i]!, ring[i + 1]!);
-    out[i] = s.x;
-    out[i + 1] = s.y;
-  }
-  return out;
 }
 
 function rgb(color: { r: number; g: number; b: number }): number {
