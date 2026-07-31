@@ -2,6 +2,7 @@ import { decideFill, type FillCandidate, type FillDecision } from '../fillDecisi
 import { selectFillWalls } from '../fillWalls';
 import { pointInRings } from '../hitTest';
 import { ringArea } from '../projectRings';
+import { log } from '../../debug/logger';
 
 /** Floods the region around the seed for a given wall set. Null when nothing encloses the seed. */
 export type RegionResolver = (walls: number[][][]) => number[][] | null;
@@ -21,8 +22,12 @@ export interface FillTargetInput {
  * flood retried without the ink that swallowed it — see `regionInsideInk`.
  */
 export function resolveFillTarget(input: FillTargetInput): FillDecision {
-  const region = input.regionFor(wallsOf(input.candidates));
+  const walls = wallsOf(input.candidates);
+  const region = input.regionFor(walls);
   const decision = decideFill(input.seed, region, input.candidates);
+  log('geom', `fillTarget pass 1 -> ${decision.kind}`, {
+    candidates: input.candidates.length, walls: walls.length, regionFound: region !== null,
+  });
   if (decision.kind !== 'recolorStroke') return decision;
   const inner = regionInsideInk(input);
   return inner ? decideFill(input.seed, inner, input.candidates) : decision;
@@ -45,12 +50,20 @@ function regionInsideInk(input: FillTargetInput): number[][] | null {
   const ink = input.candidates.filter(
     (c) => !c.isBackground && pointInRings(input.seed.x, input.seed.y, c.frameRings),
   );
-  if (ink.length === 0) return null;
+  if (ink.length === 0) {
+    log('geom', 'fillTarget retry SKIPPED (no ink covers the seed)', { seed: input.seed });
+    return null;
+  }
   const covering = new Set(ink.map((c) => c.id));
   const region = input.regionFor(wallsOf(input.candidates, covering));
-  if (!region) return null;
   const tightestInk = Math.min(...ink.map((c) => paintedArea(c.frameRings)));
-  return paintedArea(region) < tightestInk ? region : null;
+  const wins = region !== null && paintedArea(region) < tightestInk;
+  log('geom', `fillTarget retry -> ${wins ? 'FILL' : 'rejected'}`, {
+    inkCovering: ink.length, tightestInk, dropped: [...covering],
+    regionFound: region !== null,
+    regionArea: region ? paintedArea(region) : null,
+  });
+  return wins ? region : null;
 }
 
 function wallsOf(
