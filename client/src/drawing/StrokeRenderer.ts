@@ -260,7 +260,11 @@ export class StrokeRenderer {
       ringCount: decision.kind === 'fill' ? decision.rings.length : 0,
     });
     if (decision.kind === 'fill') return { kind: 'fill', rings: decision.rings, background: true };
-    if (decision.kind === 'recolorRegion') return { kind: 'recolor', ids: [decision.fillId] };
+    // Both recolor kinds expand to the connected same-colour group. Repainting only the one fill
+    // under the cursor made the bucket asymmetric: clicking a painted shape's outline recolored
+    // the whole blob, clicking its interior recolored that interior alone, so repainting a run of
+    // touching shapes meant hunting for a piece of outline to click.
+    if (decision.kind === 'recolorRegion') return this.recolorGroupOf(decision.fillId, camera);
     if (decision.kind === 'recolorStroke') return this.recolorGroupOf(decision.strokeId, camera);
     return null;
   }
