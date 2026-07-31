@@ -135,7 +135,11 @@ export class PixiApp {
       },
     };
     this.remoteQueue = new RemoteStrokeQueue(this.remoteOpSink());
-    this.collabClient = new CollabClient('http://localhost:3000', delegate);
+    // Same-origin, not a hardcoded host: in dev this is localhost:5173, and Vite's own
+    // `/socket.io` proxy (vite.config.ts) forwards it to the dev server on :3000; in production
+    // the client and Socket.io server are the same deployed origin. A hardcoded absolute URL
+    // here previously pointed every deployed client at the developer's own localhost:3000.
+    this.collabClient = new CollabClient(window.location.origin, delegate);
     this.app.stage.addChild(this.collabClient.remoteLayer);
 
     this.setupInput(this.app.canvas as HTMLCanvasElement);
