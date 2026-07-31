@@ -6,9 +6,18 @@
     <title>InfinityBoard</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
-      html, body { width: 100%; height: 100%; overflow: hidden; background: #f5f0e8; }
+      html, body {
+        width: 100%; height: 100%; overflow: hidden; background: #f5f0e8;
+        /* Kill pull-to-refresh and rubber-banding: the canvas owns every touch. */
+        overscroll-behavior: none;
+      }
       #app { width: 100%; height: 100%; cursor: crosshair; }
-      canvas { display: block; position: fixed; top: 0; left: 0; }
+      canvas {
+        display: block; position: fixed; top: 0; left: 0;
+        /* Without this the browser claims pan/pinch and never delivers the pointer events. */
+        touch-action: none;
+        user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+      }
 
       #hud {
         position: fixed;
@@ -38,6 +47,7 @@
       Tools&nbsp;&nbsp;B&nbsp;L&nbsp;R&nbsp;E&nbsp;F&nbsp;I&nbsp;&nbsp;&nbsp;Swap&nbsp;X<br>
       Draw &nbsp;&nbsp;Left click &nbsp;&nbsp;Pan &nbsp;Right-click drag<br>
       Zoom &nbsp;&nbsp;Scroll wheel &nbsp;&nbsp;Menu &nbsp;Ctrl+Right-click<br>
+      Touch&nbsp;&nbsp;1 finger draws &nbsp;&nbsp;2 fingers pan + pinch-zoom<br>
       Undo &nbsp;&nbsp;Ctrl+Z &nbsp;&nbsp;Redo Ctrl+Y &nbsp;&nbsp;Zen &nbsp;Z<br>Link &nbsp;&nbsp;Shift+C copies a deep-zoom permalink
     </div>
     <script type="module" src="/src/main.ts"></script>

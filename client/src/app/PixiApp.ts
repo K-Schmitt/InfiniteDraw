@@ -1,6 +1,7 @@
 import { Application } from 'pixi.js';
 import type { BrushStroke, Color } from '@shared/stroke';
 import { HierCamera } from './HierCamera';
+import { TouchGesture, type GestureStep } from './TouchGesture';
 import { GridBackground } from './GridBackground';
 import { StrokeRenderer } from '../drawing/StrokeRenderer';
 import { CanvasState, type RendererInstruction } from '../state/CanvasState';
@@ -69,6 +70,7 @@ export class PixiApp {
   private isPanning = false;
   private lastPanX = 0;
   private lastPanY = 0;
+  private readonly gesture = new TouchGesture();
 
   async init(container: HTMLElement): Promise<void> {
     installDebugApi();
@@ -323,6 +325,7 @@ export class PixiApp {
   // right button pans (or opens the quick menu when modified); any other button drives the tool
   private handlePointerDown(e: PointerEvent, canvas: HTMLCanvasElement): void {
     if (e.button === 2) return this.handleRightClick(e, canvas);
+    if (e.pointerType === 'touch' && this.trackTouchDown(e, canvas)) return;
     this.contextMenu.close();
     canvas.setPointerCapture(e.pointerId);
     const ctx = this.context(e, canvas.getBoundingClientRect());
@@ -360,6 +363,41 @@ export class PixiApp {
     log('camera', 'pan start', { x: e.clientX, y: e.clientY });
   }
 
+  /**
+   * Registers a touch. Returns true once two fingers are down, which claims the event for the
+   * camera; a lone finger returns false and falls through to the active tool, so drawing on a
+   * phone still works exactly like a single mouse button.
+   */
+  private trackTouchDown(e: PointerEvent, canvas: HTMLCanvasElement): boolean {
+    const isPromotion = this.gesture.start(e.pointerId, e.clientX, e.clientY);
+    if (!this.gesture.isActive) return false;
+    if (isPromotion) {
+      // The first finger had already begun a stroke — drop it rather than commit a pinch artefact.
+      this.contextMenu.close();
+      this.tools.active.cancel();
+      log('camera', 'touch gesture start', { fingers: 2, x: e.clientX, y: e.clientY });
+    }
+    // Last: capture is a nicety, and it must never be able to skip the cancel above.
+    canvas.setPointerCapture(e.pointerId);
+    return true;
+  }
+
+  private applyGesture(step: GestureStep, canvas: HTMLCanvasElement): void {
+    this.camera.panPixels(step.dx, step.dy);
+    if (step.zoomLog2 !== 0) {
+      const rect = canvas.getBoundingClientRect();
+      const pivot = this.camera.screenToFrame(step.pivotX - rect.left, step.pivotY - rect.top);
+      this.camera.zoomBy(step.zoomLog2, pivot.x, pivot.y);
+    }
+    logThrottled('pinch', 100, () => ({
+      cat: 'camera', msg: 'touch gesture',
+      data: {
+        dx: +step.dx.toFixed(2), dy: +step.dy.toFixed(2), zoom: +step.zoomLog2.toFixed(4),
+        level: this.camera.projCamera.level, logZoom: this.camera.logZoom,
+      },
+    }));
+  }
+
   private handlePointerMove(e: PointerEvent, canvas: HTMLCanvasElement): void {
     if (this.isPanning) {
       const dx = e.clientX - this.lastPanX;
@@ -372,6 +410,12 @@ export class PixiApp {
         data: { dx, dy, level: this.camera.projCamera.level, zoom: this.camera.logZoom },
       }));
       return;
+    }
+    if (e.pointerType === 'touch') {
+      const step = this.gesture.move(e.pointerId, e.clientX, e.clientY);
+      if (step) return this.applyGesture(step, canvas);
+      // A finger left over from a finished gesture must not resume the cancelled stroke.
+      if (this.gesture.isBlockingTools) return;
     }
     const t0 = performance.now();
     const rect = canvas.getBoundingClientRect();
@@ -409,6 +453,11 @@ export class PixiApp {
       log('camera', 'pan end', { level: this.camera.projCamera.level });
       return;
     }
+    if (e.pointerType === 'touch') {
+      const wasGesture = this.gesture.isBlockingTools;
+      this.gesture.end(e.pointerId);
+      if (wasGesture) return;
+    }
     const t0 = performance.now();
     const ctx = this.context(e, canvas.getBoundingClientRect());
     log('tool', `${this.tools.activeId} onUp`, { frame: ctx.frame, pressure: e.pressure });
@@ -425,6 +474,7 @@ export class PixiApp {
   private handleCancel(): void {
     log('tool', `${this.tools.activeId} cancel`, { wasPanning: this.isPanning });
     this.isPanning = false;
+    this.gesture.clear();
     this.tools.active.cancel();
   }
 
