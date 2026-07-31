@@ -82,7 +82,10 @@ export class CollabClient {
   constructor(serverUrl: string, delegate: CollabDelegate) {
     this.delegate = delegate;
     log('net', 'connecting', { serverUrl, session: SESSION_ID });
-    this.socket = io(serverUrl) as TypedSocket;
+    // Mirrors server/src/CollabServer.ts's socketIoPath(): production assets are served under
+    // Vite's `/draw/` base (the Coolify proxy only forwards that prefix to this container), so
+    // Socket.io must connect under the same prefix instead of the default root `/socket.io/`.
+    this.socket = io(serverUrl, { path: `${import.meta.env.BASE_URL}socket.io/` }) as TypedSocket;
     this.socket.on('connect', () => {
       log('net', 'CONNECTED', { socketId: this.socket.id, session: SESSION_ID });
       this.onConnect();
