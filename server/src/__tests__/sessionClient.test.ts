@@ -23,7 +23,7 @@ describe('createSessionValidator', () => {
     vi.stubGlobal('fetch', spy);
     const validate = createSessionValidator({ endpoint: ENDPOINT, timeoutMs: 2500 });
     await validate('p3_session=abc; other=1');
-    const [, init] = spy.mock.calls[0] as [string, RequestInit];
+    const [, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
     expect(new Headers(init.headers).get('cookie')).toBe('p3_session=abc; other=1');
   });
 
