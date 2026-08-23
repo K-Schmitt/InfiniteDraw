@@ -37,4 +37,11 @@ describe('wireStroke', () => {
     const hopped = JSON.parse(JSON.stringify(toWireStroke(original)));
     expect(fromWireStroke(hopped)).toEqual(original);
   });
+
+  it('strips authorId from the wire shape', () => {
+    const s: BrushStroke = { ...deepStroke(), authorId: 'better-auth-id' };
+    const wire = toWireStroke(s);
+    expect('authorId' in wire).toBe(false);
+    expect(fromWireStroke(wire).authorId).toBeUndefined();
+  });
 });

@@ -61,6 +61,11 @@ export interface BrushStroke {
   layerId: string;
   /** User who created this stroke (set by server, never trusted from client). */
   ownerId?: string;
+  /**
+   * Real Better Auth userId. Journal-only: stripped by toWireStroke so it never reaches
+   * another client (public canvas — broadcasting account ids would leak identity).
+   */
+  authorId?: string;
   createdAt: number;
   /** Absolute hierarchical anchor; `points`/`holes` are cell-local floats in [0, LOCAL_SPAN). */
   anchor: CellAnchor;

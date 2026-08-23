@@ -22,7 +22,7 @@ export interface WireCellBbox {
   maxY: string;
 }
 
-export type WireStroke = Omit<BrushStroke, 'anchor' | 'cellBbox'> & {
+export type WireStroke = Omit<BrushStroke, 'anchor' | 'cellBbox' | 'authorId'> & {
   anchor: WireCellAnchor;
   cellBbox: WireCellBbox;
 };
@@ -30,8 +30,9 @@ export type WireStroke = Omit<BrushStroke, 'anchor' | 'cellBbox'> & {
 export type WireProject = Omit<Project, 'strokes'> & { strokes: WireStroke[] };
 
 export function toWireStroke(stroke: BrushStroke): WireStroke {
+  const { authorId: _authorId, ...rest } = stroke;
   return {
-    ...stroke,
+    ...rest,
     anchor: {
       level: stroke.anchor.level,
       cellX: stroke.anchor.cell.x.toString(),

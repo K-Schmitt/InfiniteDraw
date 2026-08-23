@@ -128,6 +128,12 @@ export interface ServerToClientEvents {
   /** Cursor position broadcast from another user. */
   'cursor:moved': (cursor: CursorPosition) => void;
 
+  /** The socket's session lapsed (TTL revalidation failed) — client must show spectator UI. */
+  'auth:expired': () => void;
+
+  /** A write event was rejected because the socket has no authenticated session. */
+  'auth:denied': () => void;
+
   /** Server error (e.g. room not found, permission denied). */
   error: (message: string) => void;
 }
@@ -158,6 +164,9 @@ export interface ClientToServerEvents {
   /** Delete a stroke by id. */
   'stroke:delete': (strokeId: string) => void;
 
+  /** Delete the caller's most recent authored stroke (mobile-friendly scoped undo). */
+  'stroke:undoMine': () => void;
+
   /** Recolor a set of strokes to one color (paint-bucket on existing shapes). */
   'stroke:recolor': (payload: RecolorPayload) => void;
 
@@ -176,8 +185,15 @@ export interface InterServerEvents {
   ping: () => void;
 }
 
+export interface SocketAuthStateWire {
+  user: { id: string; name: string } | null;
+  cookieHeader?: string;
+  validatedAt: number;
+}
+
 export interface SocketData {
   userId: string;
   roomId: string;
   user: ConnectedUser;
+  auth: SocketAuthStateWire;
 }
