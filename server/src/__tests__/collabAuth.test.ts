@@ -159,6 +159,22 @@ describe('collab auth integration', () => {
     expect(JSON.stringify(wire)).not.toContain('ba-1');
   });
 
+  it('stroke:commit ignores a client-supplied authorId and stamps the gate result', async () => {
+    const alice = await joinWith('p3_session=good');
+    // `fromWireStroke` spreads unknown wire properties through, so a malicious client could
+    // attach an `authorId` the type system says WireStroke doesn't carry. The server must
+    // still stamp its own gate result, not this forged value.
+    const forged = { ...toWireStroke(stroke('forge1')), authorId: 'forged-user' } as WireStroke;
+    const added = nextEvent<WireStroke>(alice, 'stroke:added');
+    alice.emit('stroke:commit', forged);
+    await added;
+    // If the forged id had survived, undoMine (scoped to alice's real Better Auth id) would
+    // find nothing to delete: the stored authorId would be 'forged-user', not alice's.
+    const deleted = nextEvent<string>(alice, 'stroke:deleted');
+    alice.emit('stroke:undoMine');
+    expect(await deleted).toBe('forge1');
+  });
+
   it('names the connected user after the session displayName', async () => {
     const peer = await joinWith('p3_session=good');
     const joined = nextEvent<ConnectedUser>(peer, 'user:joined');

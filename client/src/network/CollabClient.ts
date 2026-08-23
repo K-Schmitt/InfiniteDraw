@@ -130,8 +130,14 @@ export class CollabClient {
       this.removeGhost(userId);
     });
     this.socket.on('cursor:moved', (c) => this.moveGhost(c.userId, c.x, c.y, c.camera));
-    this.socket.on('auth:expired', () => { log('net', 'IN auth:expired'); this.delegate.authExpired(); });
-    this.socket.on('auth:denied', () => { log('net', 'IN auth:denied'); this.delegate.authDenied(); });
+    this.socket.on('auth:expired', () => {
+      log('net', 'IN auth:expired');
+      this.delegate.authExpired();
+    });
+    this.socket.on('auth:denied', () => {
+      log('net', 'IN auth:denied');
+      this.delegate.authDenied();
+    });
     this.socket.on('error', (msg) => log('error', 'server error', { message: msg }));
   }
 

@@ -29,11 +29,15 @@ export function applyBatchOrder(
 ): OrderedBatch {
   let z = context.nextZ;
   const out: BrushStroke[] = [];
+  // authorId must be exactly the caller's verdict (`context.authorId`): `...stroke` alone would
+  // let a client-supplied authorId survive from the incoming wire payload, so it's stripped
+  // here before the authoritative stamp (or absence of one) is applied.
   const authorStamp = context.authorId !== undefined ? { authorId: context.authorId } : {};
   for (const stroke of strokes) {
     const restored = context.preserveOrder && isIssuedOrder(stroke.zIndex, context.nextZ);
+    const { authorId: _forgedAuthorId, ...rest } = stroke;
     out.push({
-      ...stroke,
+      ...rest,
       zIndex: restored ? stroke.zIndex : z++,
       ownerId: context.ownerId,
       ...authorStamp,

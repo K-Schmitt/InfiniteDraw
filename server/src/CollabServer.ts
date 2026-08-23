@@ -226,8 +226,15 @@ export class CollabServer {
       return;
     }
     stroke.ownerId = socket.data.userId;
+    // authorId must be exactly the gate's verdict: `fromWireStroke` spreads unknown wire
+    // properties through, so a client-supplied authorId has to be overwritten (or dropped)
+    // rather than trusted when present.
     const authorId = socket.data.auth.user?.id;
-    if (authorId !== undefined) stroke.authorId = authorId;
+    if (authorId !== undefined) {
+      stroke.authorId = authorId;
+    } else {
+      delete stroke.authorId;
+    }
     stroke.zIndex = this.nextZ++;
     await this.room.addStroke(stroke);
     log('net', 'IN stroke:commit -> OUT stroke:added', {

@@ -5,7 +5,7 @@ import type {
   InterServerEvents,
   SocketData,
 } from '@shared/socket-events.js';
-import type { AuthUser, SessionValidator } from './types.js';
+import type { AuthUser, SessionValidator, SocketAuthState } from './types.js';
 import type { WriterGate } from './writerGate.js';
 import type { WriteRateLimit } from './writeRateLimit.js';
 
@@ -21,19 +21,30 @@ export type WriteAuthorizer = (socket: CollabSocket) => Promise<AuthUser | null>
 /**
  * Handshake middleware: resolves the session once per connection and caches it on the socket.
  * Always calls `next()` — an unresolved or invalid session becomes a spectator rather than a
- * rejected connection, so the room stays visible (read-only) even without a session.
+ * rejected connection, so the room stays visible (read-only) even without a session. The
+ * `.catch()` is load-bearing: without it a rejecting validator would leave `next()` uncalled
+ * and hang every handshake, since socket.io never times out a pending `io.use` middleware.
  */
 export function attachAuthMiddleware(io: CollabIo, validator: SessionValidator): void {
   io.use((socket, next) => {
-    void validator(socket.handshake.headers.cookie).then((user) => {
-      socket.data.auth = {
-        user,
-        cookieHeader: socket.handshake.headers.cookie,
-        validatedAt: Date.now(),
-      };
-      next(); // always next(): fail-open to spectator
-    });
+    const cookieHeader = socket.handshake.headers.cookie;
+    void validator(cookieHeader)
+      .then((user) => {
+        socket.data.auth = spectatorState(cookieHeader, user);
+        next(); // always next(): fail-open to spectator
+      })
+      .catch(() => {
+        socket.data.auth = spectatorState(cookieHeader, null);
+        next(); // validator rejected: fail-open to spectator, same as an invalid session
+      });
   });
+}
+
+function spectatorState(
+  cookieHeader: string | undefined,
+  user: AuthUser | null,
+): SocketAuthState {
+  return { user, cookieHeader, validatedAt: Date.now() };
 }
 
 /** Builds the per-write guard used by every write handler: gate check, then rate limit. */

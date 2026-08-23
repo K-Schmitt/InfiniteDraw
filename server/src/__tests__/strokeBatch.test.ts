@@ -44,6 +44,19 @@ describe('applyBatchOrder', () => {
     expect(result.strokes[0]!.authorId).toBeUndefined();
   });
 
+  it('replaces a client-supplied authorId with the context authorId', () => {
+    const forged = { ...stroke('a'), authorId: 'forged-user' };
+    const result = applyBatchOrder([forged], { nextZ: 0, ownerId: 'u1', authorId: 'ba-1' });
+    expect(result.strokes[0]!.authorId).toBe('ba-1');
+  });
+
+  it('strips a client-supplied authorId when the context has none', () => {
+    const forged = { ...stroke('a'), authorId: 'forged-user' };
+    const result = applyBatchOrder([forged], { nextZ: 0, ownerId: 'u1' });
+    expect(result.strokes[0]!.authorId).toBeUndefined();
+    expect('authorId' in result.strokes[0]!).toBe(false);
+  });
+
   it('handles an empty batch without moving the counter', () => {
     const result = applyBatchOrder([], { nextZ: 3, ownerId: 'u1' });
     expect(result).toEqual({ strokes: [], nextZ: 3 });
