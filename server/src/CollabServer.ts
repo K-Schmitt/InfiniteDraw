@@ -1,6 +1,6 @@
 import { type Server as HttpServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { Server, type Socket } from 'socket.io';
+import { Server } from 'socket.io';
 import type {
   ServerToClientEvents,
   ClientToServerEvents,
@@ -18,9 +18,22 @@ import { GlobalRoom } from './room/GlobalRoom.js';
 import { StrokeJournal } from './storage/StrokeJournal.js';
 import { applyBatchOrder } from './batchOrder.js';
 import { log } from './debug/logger.js';
+import type { SessionValidator } from './auth/types.js';
+import { createWriterGate } from './auth/writerGate.js';
+import { WriteRateLimit } from './auth/writeRateLimit.js';
+import {
+  attachAuthMiddleware,
+  createWriteAuthorizer,
+  type CollabSocket,
+  type WriteAuthorizer,
+} from './auth/socketAuthorizer.js';
 
-type CollabSocket =
-  Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>;
+/** Auth wiring handed to `CollabServer`: who may write, how sessions revalidate, how fast. */
+export interface CollabAuthConfig {
+  validator: SessionValidator;
+  ttlMs?: number;
+  rateLimit?: WriteRateLimit;
+}
 
 /**
  * Socket.io wiring for the single global room. Owns connection lifecycle, event relay,
@@ -36,8 +49,16 @@ export class CollabServer {
   >;
   private room: GlobalRoom | null = null;
   private nextZ = 0;
+  private readonly authorizeWrite: WriteAuthorizer;
 
-  constructor(httpServer: HttpServer, private readonly journalPath = 'data/journal.bin') {
+  constructor(
+    httpServer: HttpServer,
+    private readonly journalPath: string,
+    auth: CollabAuthConfig,
+  ) {
+    const gate = createWriterGate({ validator: auth.validator, ttlMs: auth.ttlMs ?? 30 * 60_000 });
+    const rateLimit = auth.rateLimit ?? new WriteRateLimit({ capacity: 1200, refillPerSecond: 240 });
+    this.authorizeWrite = createWriteAuthorizer(gate, rateLimit);
     this.io = new Server<
       ClientToServerEvents,
       ServerToClientEvents,
@@ -45,14 +66,13 @@ export class CollabServer {
       SocketData
     >(httpServer, { cors: { origin: allowedOrigins() } });
 
+    attachAuthMiddleware(this.io, auth.validator);
     this.io.on('connection', (socket) => this.onConnection(socket));
   }
 
   // ---- connection lifecycle -------------------------------------------------
 
-  private onConnection(
-    socket: Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
-  ): void {
+  private onConnection(socket: CollabSocket): void {
     log('conn', 'socket connected', {
       socketId: socket.id,
       address: socket.handshake.address,
@@ -64,26 +84,55 @@ export class CollabServer {
     socket.on('room:join', (roomId, cb) => { void this.handleJoin(socket, roomId, cb); });
 
     socket.on('stroke:begin', (p) => {
-      log('net', 'IN stroke:begin', {
-        socketId: socket.id, userId: socket.data.userId,
-        tentativeId: p.tentativeId, color: p.color, size: p.size, camera: p.camera,
-      });
-      this.relay(socket, 'stroke:begin', { ...p, userId: socket.data.userId! });
+      void (async () => {
+        if (!(await this.authorizeWrite(socket))) return;
+        log('net', 'IN stroke:begin', {
+          socketId: socket.id, userId: socket.data.userId,
+          tentativeId: p.tentativeId, color: p.color, size: p.size, camera: p.camera,
+        });
+        this.relay(socket, 'stroke:begin', { ...p, userId: socket.data.userId! });
+      })();
     });
     socket.on('stroke:point', (p) => {
-      log('net', 'IN stroke:point', {
-        socketId: socket.id, tentativeId: p.tentativeId, point: p.point,
-      });
-      this.relay(socket, 'stroke:point', { ...p, userId: socket.data.userId! });
+      void (async () => {
+        if (!(await this.authorizeWrite(socket))) return;
+        log('net', 'IN stroke:point', {
+          socketId: socket.id, tentativeId: p.tentativeId, point: p.point,
+        });
+        this.relay(socket, 'stroke:point', { ...p, userId: socket.data.userId! });
+      })();
     });
-    socket.on('stroke:commit', (s) => { void this.handleCommit(socket, s); });
-    socket.on('stroke:batch', (p) => { void this.handleBatch(socket, p); });
+    socket.on('stroke:commit', (s) => {
+      void (async () => {
+        if (!(await this.authorizeWrite(socket))) return;
+        await this.handleCommit(socket, s);
+      })();
+    });
+    socket.on('stroke:batch', (p) => {
+      void (async () => {
+        if (!(await this.authorizeWrite(socket))) return;
+        await this.handleBatch(socket, p);
+      })();
+    });
     socket.on('stroke:preview', (p) => {
-      log('net', 'IN stroke:preview', { socketId: socket.id, id: p.id, points: p.points.length });
-      this.relay(socket, 'stroke:preview', p);
+      void (async () => {
+        if (!(await this.authorizeWrite(socket))) return;
+        log('net', 'IN stroke:preview', { socketId: socket.id, id: p.id, points: p.points.length });
+        this.relay(socket, 'stroke:preview', p);
+      })();
     });
-    socket.on('stroke:delete', (id) => { void this.handleDelete(socket, id); });
-    socket.on('stroke:recolor', (p) => { void this.handleRecolor(socket, p); });
+    socket.on('stroke:delete', (id) => {
+      void (async () => {
+        if (!(await this.authorizeWrite(socket))) return;
+        await this.handleDelete(socket, id);
+      })();
+    });
+    socket.on('stroke:recolor', (p) => {
+      void (async () => {
+        if (!(await this.authorizeWrite(socket))) return;
+        await this.handleRecolor(socket, p);
+      })();
+    });
     socket.on('cursor:move', (pos) => this.handleCursor(socket, pos));
 
     socket.on('disconnect', (reason) => {
@@ -96,50 +145,54 @@ export class CollabServer {
   }
 
   private async handleCreate(
-    socket: Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
+    socket: CollabSocket,
     callback: (roomId: string) => void,
   ): Promise<void> {
     const room = await this.getOrCreateRoom();
-    const user = this.makeUser(socket);
-    socket.data.user = user;
-    socket.data.userId = user.id;
+    const strokes = room.snapshot();
+    const isWriter = socket.data.auth.user !== null;
+    if (isWriter) {
+      const user = this.makeUser(socket);
+      socket.data.user = user;
+      socket.data.userId = user.id;
+      room.addUser(user);
+      socket.to('global').emit('user:joined', user);
+    }
     socket.data.roomId = 'global';
     await socket.join('global');
-    room.addUser(user);
-    const strokes = room.snapshot();
     log('conn', 'room:create', {
-      socketId: socket.id, user, strokesSent: strokes.length, usersInRoom: room.users().length,
+      socketId: socket.id, isWriter, strokesSent: strokes.length, usersInRoom: room.users().length,
     });
     socket.emit('project:state', toWireProject(emptyProject(strokes)));
-    socket.to('global').emit('user:joined', user);
     callback('global');
   }
 
   private async handleJoin(
-    socket: Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
+    socket: CollabSocket,
     _roomId: string,
     callback: (error?: string) => void,
   ): Promise<void> {
     const room = await this.getOrCreateRoom();
-    const user = this.makeUser(socket);
-    socket.data.user = user;
-    socket.data.userId = user.id;
+    const strokes = room.snapshot();
+    const isWriter = socket.data.auth.user !== null;
+    if (isWriter) {
+      const user = this.makeUser(socket);
+      socket.data.user = user;
+      socket.data.userId = user.id;
+      room.addUser(user);
+      socket.to('global').emit('user:joined', user);
+    }
     socket.data.roomId = 'global';
     await socket.join('global');
-    room.addUser(user);
-    const strokes = room.snapshot();
     log('conn', 'room:join', {
-      socketId: socket.id, requested: _roomId, user,
+      socketId: socket.id, requested: _roomId, isWriter,
       strokesSent: strokes.length, usersInRoom: room.users().length,
     });
     socket.emit('project:state', toWireProject(emptyProject(strokes)));
-    socket.to('global').emit('user:joined', user);
     callback();
   }
 
-  private handleDisconnect(
-    socket: Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
-  ): void {
+  private handleDisconnect(socket: CollabSocket): void {
     if (!this.room || !socket.data.userId) return;
     this.room.removeUser(socket.data.userId);
     log('room', 'user removed', {
@@ -151,7 +204,7 @@ export class CollabServer {
   // ---- stroke relay ---------------------------------------------------------
 
   private relay<T extends keyof ServerToClientEvents>(
-    socket: Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
+    socket: CollabSocket,
     event: T,
     ...args: Parameters<ServerToClientEvents[T]>
   ): void {
@@ -160,7 +213,7 @@ export class CollabServer {
   }
 
   private async handleCommit(
-    socket: Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
+    socket: CollabSocket,
     wire: WireStroke,
   ): Promise<void> {
     if (!this.room || !socket.data.roomId) return;
@@ -172,6 +225,8 @@ export class CollabServer {
       return;
     }
     stroke.ownerId = socket.data.userId;
+    const authorId = socket.data.auth.user?.id;
+    if (authorId !== undefined) stroke.authorId = authorId;
     stroke.zIndex = this.nextZ++;
     await this.room.addStroke(stroke);
     log('net', 'IN stroke:commit -> OUT stroke:added', {
@@ -200,10 +255,12 @@ export class CollabServer {
     if (!this.room || !socket.data.roomId) return;
     for (const id of payload.deletes) await this.room.deleteStroke(id);
     const incoming = payload.adds.map(fromWireStroke).filter((s) => validateStroke(s) === null);
+    const authorId = socket.data.auth.user?.id;
     const ordered = applyBatchOrder(incoming, {
       nextZ: this.nextZ,
       ownerId: socket.data.userId!,
       preserveOrder: payload.preserveOrder === true,
+      ...(authorId !== undefined ? { authorId } : {}),
     });
     this.nextZ = ordered.nextZ;
     for (const stroke of ordered.strokes) await this.room.addStroke(stroke);
@@ -219,7 +276,7 @@ export class CollabServer {
   }
 
   private async handleDelete(
-    socket: Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
+    socket: CollabSocket,
     strokeId: string,
   ): Promise<void> {
     // No ownership check: the room is a shared canvas and the vector eraser works by
@@ -237,7 +294,7 @@ export class CollabServer {
   }
 
   private async handleRecolor(
-    socket: Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
+    socket: CollabSocket,
     payload: RecolorPayload,
   ): Promise<void> {
     if (!this.room || !socket.data.roomId) return;
@@ -253,10 +310,8 @@ export class CollabServer {
 
   // ---- cursor ---------------------------------------------------------------
 
-  private handleCursor(
-    socket: Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
-    position: CursorMovePayload,
-  ): void {
+  private handleCursor(socket: CollabSocket, position: CursorMovePayload): void {
+    if (!socket.data.auth.user) return;
     if (!socket.data.roomId || !socket.data.userId) return;
     log('net', 'IN cursor:move', {
       socketId: socket.id, userId: socket.data.userId,
@@ -288,7 +343,7 @@ export class CollabServer {
   }
 
   private makeUser(
-    socket: Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
+    socket: CollabSocket,
   ): ConnectedUser {
     const colors: ConnectedUser['color'][] = [
       { r: 59, g: 130, b: 246, a: 255 },
@@ -302,7 +357,7 @@ export class CollabServer {
     const index = (this.room?.users().length ?? 0) % colors.length;
     return {
       id: randomUUID(),
-      name: `User-${socket.id.slice(0, 5)}`,
+      name: socket.data.auth.user?.name ?? `User-${socket.id.slice(0, 5)}`,
       color: colors[index]!,
     };
   }

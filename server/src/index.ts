@@ -4,7 +4,8 @@ import { resolve } from 'node:path';
 import { CollabServer } from './CollabServer.js';
 import { serveClient } from './staticSite.js';
 import { log, logFilePath, installProcessHooks } from './debug/logger.js';
-import { assertDevUserSafety } from './auth/devBypass.js';
+import { createSessionValidator } from './auth/sessionClient.js';
+import { applyDevBypass, assertDevUserSafety } from './auth/devBypass.js';
 
 installProcessHooks();
 assertDevUserSafety(process.env);
@@ -34,7 +35,13 @@ httpServer.on('error', (err: NodeJS.ErrnoException) => {
   throw err;
 });
 
-new CollabServer(httpServer, process.env['JOURNAL_PATH'] ?? 'data/journal.bin');
+const AUTH_ENDPOINT =
+  process.env['AUTH_API'] ?? 'https://api.slackliniste.com/api/auth/get-session';
+const validator = applyDevBypass(
+  createSessionValidator({ endpoint: AUTH_ENDPOINT, timeoutMs: 2500 }),
+  process.env,
+);
+new CollabServer(httpServer, process.env['JOURNAL_PATH'] ?? 'data/journal.bin', { validator });
 
 httpServer.listen(PORT, () => {
   console.log(`InfiniteDraw server listening on :${PORT}`);

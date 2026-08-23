@@ -64,7 +64,9 @@ describe('stroke:batch integration', () => {
   beforeEach(async () => {
     journalDir = await mkdtemp(join(tmpdir(), 'idraw-batch-'));
     httpServer = createServer();
-    new CollabServer(httpServer, join(journalDir, 'room.idraw'));
+    new CollabServer(httpServer, join(journalDir, 'room.idraw'), {
+      validator: async () => ({ id: 'test-author', name: 'Test' }),
+    });
     await new Promise<void>((resolve) => httpServer.listen(0, resolve));
     const address = httpServer.address();
     if (address === null || typeof address === 'string') throw new Error('no ephemeral port');

@@ -187,7 +187,12 @@ export interface InterServerEvents {
 
 export interface SocketAuthStateWire {
   user: { id: string; name: string } | null;
-  cookieHeader?: string;
+  /**
+   * Required (not `?`) so this shape stays structurally identical to server-side
+   * `SocketAuthState` — the writer gate mutates the socket's live auth object in place, and an
+   * optional key here would make that object unassignable to `GateSocket` without a cast.
+   */
+  cookieHeader: string | undefined;
   validatedAt: number;
 }
 

@@ -32,6 +32,18 @@ describe('applyBatchOrder', () => {
     expect(result.strokes[0]!.ownerId).toBe('u1');
   });
 
+  it('stamps the authorId on every stroke when provided', () => {
+    const result = applyBatchOrder([stroke('a')], {
+      nextZ: 0, ownerId: 'u1', authorId: 'ba-1',
+    });
+    expect(result.strokes[0]!.authorId).toBe('ba-1');
+  });
+
+  it('leaves authorId unset when the context omits it', () => {
+    const result = applyBatchOrder([stroke('a')], { nextZ: 0, ownerId: 'u1' });
+    expect(result.strokes[0]!.authorId).toBeUndefined();
+  });
+
   it('handles an empty batch without moving the counter', () => {
     const result = applyBatchOrder([], { nextZ: 3, ownerId: 'u1' });
     expect(result).toEqual({ strokes: [], nextZ: 3 });

@@ -3,6 +3,8 @@ import type { BrushStroke } from '@shared/stroke.js';
 export interface BatchOrderContext {
   readonly nextZ: number;
   readonly ownerId: string;
+  /** Real Better Auth userId of the socket that sent the batch, stamped onto every add. */
+  readonly authorId?: string;
   /**
    * Restore each stroke to the paint slot it already held instead of stamping a fresh block.
    * Set for undo/redo re-adds, never for the eraser: a redone stroke belongs where it was, while
@@ -27,9 +29,15 @@ export function applyBatchOrder(
 ): OrderedBatch {
   let z = context.nextZ;
   const out: BrushStroke[] = [];
+  const authorStamp = context.authorId !== undefined ? { authorId: context.authorId } : {};
   for (const stroke of strokes) {
     const restored = context.preserveOrder && isIssuedOrder(stroke.zIndex, context.nextZ);
-    out.push({ ...stroke, zIndex: restored ? stroke.zIndex : z++, ownerId: context.ownerId });
+    out.push({
+      ...stroke,
+      zIndex: restored ? stroke.zIndex : z++,
+      ownerId: context.ownerId,
+      ...authorStamp,
+    });
   }
   return { strokes: out, nextZ: z };
 }
