@@ -51,8 +51,11 @@ function nextEvent<T>(socket: TestSocket, event: string, timeoutMs = 2000): Prom
   });
 }
 
-const validator: SessionValidator = async (cookie) =>
-  cookie?.includes('p3_session=good') ? { id: 'ba-1', name: 'Kylian' } : null;
+const validator: SessionValidator = async (cookie) => {
+  if (cookie?.includes('p3_session=good-bob')) return { id: 'ba-2', name: 'Bob' };
+  if (cookie?.includes('p3_session=good')) return { id: 'ba-1', name: 'Kylian' };
+  return null;
+};
 
 describe('collab auth integration', () => {
   let httpServer: HttpServer;
@@ -112,6 +115,13 @@ describe('collab auth integration', () => {
     return socket;
   }
 
+  /** Commits a stroke and awaits its `stroke:added` echo back to the committing socket. */
+  async function commit(socket: TestSocket, id: string): Promise<void> {
+    const added = nextEvent<WireStroke>(socket, 'stroke:added');
+    socket.emit('stroke:commit', toWireStroke(stroke(id)));
+    await added;
+  }
+
   it('lets an authenticated socket commit a stroke', async () => {
     const author = await joinWith('p3_session=good');
     const peer = await joinWith('p3_session=good');
@@ -169,5 +179,25 @@ describe('collab auth integration', () => {
     const joined = nextEvent<ConnectedUser>(peer, 'user:joined');
     await joinRoomWith('p3_session=good');
     expect((await joined).name).toBe('Kylian');
+  });
+
+  it('stroke:undoMine deletes only the caller-authored most recent stroke', async () => {
+    const alice = await joinWith('p3_session=good');
+    const bob = await joinWith('p3_session=good-bob');
+    await commit(alice, 'a1');
+    await commit(bob, 'b1');
+    await commit(alice, 'a2');
+    const deletedOnBob = nextEvent<string>(bob, 'stroke:deleted');
+    const deletedOnAlice = nextEvent<string>(alice, 'stroke:deleted');
+    alice.emit('stroke:undoMine');
+    expect(await deletedOnBob).toBe('a2');
+    expect(await deletedOnAlice).toBe('a2');
+  });
+
+  it('stroke:undoMine with nothing authored is a silent no-op', async () => {
+    const alice = await joinWith('p3_session=good');
+    const deleted = nextEvent<string>(alice, 'stroke:deleted', 500).catch(() => 'timeout');
+    alice.emit('stroke:undoMine');
+    expect(await deleted).toBe('timeout');
   });
 });

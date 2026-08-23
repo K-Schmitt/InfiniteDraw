@@ -17,6 +17,7 @@ import type { BrushStroke, StrokePreview } from '@shared/stroke.js';
 import type { Project } from '@shared/project.js';
 import { toWireStroke, fromWireStroke, toWireProject, type WireStroke } from '@shared/wireStroke.js';
 import { GlobalRoom } from './room/GlobalRoom.js';
+import { undoMostRecentAuthored } from './room/scopedUndo.js';
 import { StrokeJournal } from './storage/StrokeJournal.js';
 import { applyBatchOrder } from './batchOrder.js';
 import { log } from './debug/logger.js';
@@ -105,6 +106,15 @@ export class CollabServer {
     socket.on('stroke:preview', (p) => this.gated(socket, () => this.handlePreview(socket, p)));
     socket.on('stroke:delete', (id) => this.gated(socket, () => this.handleDelete(socket, id)));
     socket.on('stroke:recolor', (p) => this.gated(socket, () => this.handleRecolor(socket, p)));
+    // Mobile-friendly scoped undo: remove the caller's most recent authored stroke.
+    socket.on('stroke:undoMine', () => {
+      void (async () => {
+        const user = await this.authorizeWrite(socket);
+        if (!user || !this.room || !socket.data.roomId) return;
+        const roomId = socket.data.roomId;
+        await undoMostRecentAuthored(this.room, this.io, { authorId: user.id, roomId });
+      })();
+    });
   }
 
   /** Runs `action` only once `authorizeWrite` clears the socket for a write. */
