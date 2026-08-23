@@ -43,10 +43,11 @@ export class StrokeJournal {
 
   async appendStroke(stroke: BrushStroke): Promise<void> {
     this.strokes.set(stroke.id, stroke);
-    const payload = stroke.authorId
-      ? Buffer.concat([writePascalString(stroke.authorId), encodeStroke(stroke)])
+    const hasAuthor = stroke.authorId !== undefined;
+    const payload = hasAuthor
+      ? Buffer.concat([writePascalString(stroke.authorId!), encodeStroke(stroke)])
       : encodeStroke(stroke);
-    const op = stroke.authorId ? OP_ADD_AUTH : OP_ADD;
+    const op = hasAuthor ? OP_ADD_AUTH : OP_ADD;
     const record = frame(op, payload);
     await appendFile(this.path, record);
     log('store', 'journal ADD', { id: stroke.id, bytes: record.length, live: this.strokes.size });

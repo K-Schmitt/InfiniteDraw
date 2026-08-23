@@ -52,4 +52,14 @@ describe('journal authorship', () => {
     expect(j2.load()).toHaveLength(1);
     expect(j2.load()[0]?.authorId).toBeUndefined();
   });
+
+  it('preserves empty-string authorId (not falsy downgrade)', async () => {
+    const path = join(dir, 'empty-author.bin');
+    const j1 = await StrokeJournal.open(path);
+    await j1.appendStroke({ ...stroke('c'), authorId: '' });
+    const j2 = await StrokeJournal.open(path);
+    const loaded = j2.load();
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]?.authorId).toBe('');
+  });
 });
