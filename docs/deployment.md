@@ -62,3 +62,18 @@ curl -i "$DOMAIN/socket.io/?EIO=4&transport=polling" | head -1   # expect HTTP 2
 
 Browser DevTools → Network → WS must show `101 Switching Protocols`. A connection
 stuck on `polling` means the reverse proxy is dropping `Upgrade`/`Connection` headers.
+
+## SEO under slackliniste.com/draw
+
+`robots.txt` is per host and owned by MyWeb; this repo must never ship one. What lives here:
+
+| Element | Where | Note |
+| --- | --- | --- |
+| `<title>`, description, canonical `https://slackliniste.com/draw`, `og:*`, `twitter:*` | `client/index.html` | static, no build step |
+| `og-image.png` 1200×630 | `client/public/og-image.png` | source `client/og/og-image.svg`, rebuild with `inkscape og/og-image.svg --export-type=png --export-filename=public/og-image.png -w 1200 -h 630` |
+| `/draw/sitemap.xml` | `client/public/sitemap.xml` | single URL; declared in MyWeb `robots.ts` |
+| 404 | `server/src/notFoundPage.ts` | only `/` serves the app — permalinks use the URL hash, so any other path is a real 404 (`noindex`) |
+
+Verify after deploy: `curl -s https://slackliniste.com/robots.txt` lists `/draw/sitemap.xml`;
+`curl -sI https://slackliniste.com/draw/nope | head -1` is `404`; sharing the link on
+Discord/Twitter shows the OG image.

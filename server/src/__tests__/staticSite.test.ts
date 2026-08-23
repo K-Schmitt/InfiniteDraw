@@ -24,14 +24,45 @@ describe('serveClient', () => {
     expect(serveClient(express(), join(dir, 'nope'))).toBe(false);
   });
 
-  it('serves a deep SPA route even when the given dir is relative', async () => {
+  it('serves "/" even when the given dir is relative', async () => {
     const app = express();
     serveClient(app, relative(process.cwd(), dir));
     const server = app.listen(0);
     const { port } = server.address() as AddressInfo;
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/some/deep/route`);
+      const res = await fetch(`http://127.0.0.1:${port}/`);
       expect(res.status).toBe(200);
+      expect(await res.text()).toContain('<title>ok</title>');
+    } finally {
+      server.close();
+    }
+  });
+
+  it('answers a real 404 (not the SPA shell) for unknown paths', async () => {
+    const app = express();
+    serveClient(app, dir);
+    const server = app.listen(0);
+    const { port } = server.address() as AddressInfo;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/some/deep/route`);
+      expect(res.status).toBe(404);
+      expect(res.headers.get('content-type')).toContain('text/html');
+      expect(await res.text()).toContain('noindex');
+    } finally {
+      server.close();
+    }
+  });
+
+  it('serves static files from the bundle (sitemap.xml)', async () => {
+    writeFileSync(join(dir, 'sitemap.xml'), '<urlset/>');
+    const app = express();
+    serveClient(app, dir);
+    const server = app.listen(0);
+    const { port } = server.address() as AddressInfo;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/sitemap.xml`);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('<urlset/>');
     } finally {
       server.close();
     }
