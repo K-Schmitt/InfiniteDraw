@@ -102,6 +102,16 @@ describe('collab auth integration', () => {
     return socket;
   }
 
+  /** Connects with the given cookie and completes the room:join / project:state dance. */
+  async function joinRoomWith(cookie?: string): Promise<TestSocket> {
+    const socket = connectWith(cookie);
+    await new Promise<void>((resolve) => socket.on('connect', () => resolve()));
+    const stateReady = nextEvent<WireProject>(socket, 'project:state');
+    await new Promise<void>((resolve) => socket.emit('room:join', 'global', () => resolve()));
+    await stateReady;
+    return socket;
+  }
+
   it('lets an authenticated socket commit a stroke', async () => {
     const author = await joinWith('p3_session=good');
     const peer = await joinWith('p3_session=good');
@@ -143,6 +153,21 @@ describe('collab auth integration', () => {
     const peer = await joinWith('p3_session=good');
     const joined = nextEvent<ConnectedUser>(peer, 'user:joined');
     await joinWith('p3_session=good');
+    expect((await joined).name).toBe('Kylian');
+  });
+
+  it('room:join: does not announce a spectator but still sends project:state', async () => {
+    const peer = await joinWith('p3_session=good');
+    const joined = nextEvent<ConnectedUser>(peer, 'user:joined', 500).catch(() => 'timeout');
+    const spectator = await joinRoomWith(undefined);
+    expect(await joined).toBe('timeout');
+    expect(spectator.connected).toBe(true);
+  });
+
+  it('room:join: announces a writer with the session displayName', async () => {
+    const peer = await joinWith('p3_session=good');
+    const joined = nextEvent<ConnectedUser>(peer, 'user:joined');
+    await joinRoomWith('p3_session=good');
     expect((await joined).name).toBe('Kylian');
   });
 });

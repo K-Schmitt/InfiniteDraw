@@ -10,8 +10,10 @@ import type {
   CursorMovePayload,
   RecolorPayload,
   StrokeBatchPayload,
+  StrokeBeginPayload,
+  StrokePointPayload,
 } from '@shared/socket-events.js';
-import type { BrushStroke } from '@shared/stroke.js';
+import type { BrushStroke, StrokePreview } from '@shared/stroke.js';
 import type { Project } from '@shared/project.js';
 import { toWireStroke, fromWireStroke, toWireProject, type WireStroke } from '@shared/wireStroke.js';
 import { GlobalRoom } from './room/GlobalRoom.js';
@@ -82,57 +84,7 @@ export class CollabServer {
 
     socket.on('room:create', (cb) => { void this.handleCreate(socket, cb); });
     socket.on('room:join', (roomId, cb) => { void this.handleJoin(socket, roomId, cb); });
-
-    socket.on('stroke:begin', (p) => {
-      void (async () => {
-        if (!(await this.authorizeWrite(socket))) return;
-        log('net', 'IN stroke:begin', {
-          socketId: socket.id, userId: socket.data.userId,
-          tentativeId: p.tentativeId, color: p.color, size: p.size, camera: p.camera,
-        });
-        this.relay(socket, 'stroke:begin', { ...p, userId: socket.data.userId! });
-      })();
-    });
-    socket.on('stroke:point', (p) => {
-      void (async () => {
-        if (!(await this.authorizeWrite(socket))) return;
-        log('net', 'IN stroke:point', {
-          socketId: socket.id, tentativeId: p.tentativeId, point: p.point,
-        });
-        this.relay(socket, 'stroke:point', { ...p, userId: socket.data.userId! });
-      })();
-    });
-    socket.on('stroke:commit', (s) => {
-      void (async () => {
-        if (!(await this.authorizeWrite(socket))) return;
-        await this.handleCommit(socket, s);
-      })();
-    });
-    socket.on('stroke:batch', (p) => {
-      void (async () => {
-        if (!(await this.authorizeWrite(socket))) return;
-        await this.handleBatch(socket, p);
-      })();
-    });
-    socket.on('stroke:preview', (p) => {
-      void (async () => {
-        if (!(await this.authorizeWrite(socket))) return;
-        log('net', 'IN stroke:preview', { socketId: socket.id, id: p.id, points: p.points.length });
-        this.relay(socket, 'stroke:preview', p);
-      })();
-    });
-    socket.on('stroke:delete', (id) => {
-      void (async () => {
-        if (!(await this.authorizeWrite(socket))) return;
-        await this.handleDelete(socket, id);
-      })();
-    });
-    socket.on('stroke:recolor', (p) => {
-      void (async () => {
-        if (!(await this.authorizeWrite(socket))) return;
-        await this.handleRecolor(socket, p);
-      })();
-    });
+    this.registerWriteHandlers(socket);
     socket.on('cursor:move', (pos) => this.handleCursor(socket, pos));
 
     socket.on('disconnect', (reason) => {
@@ -142,6 +94,45 @@ export class CollabServer {
     socket.on('error', (err: Error) => {
       log('error', 'socket error', { socketId: socket.id, message: err.message, stack: err.stack });
     });
+  }
+
+  /** Registers every write event behind the shared `authorizeWrite` gate. */
+  private registerWriteHandlers(socket: CollabSocket): void {
+    socket.on('stroke:begin', (p) => this.gated(socket, () => this.handleBegin(socket, p)));
+    socket.on('stroke:point', (p) => this.gated(socket, () => this.handlePoint(socket, p)));
+    socket.on('stroke:commit', (s) => this.gated(socket, () => this.handleCommit(socket, s)));
+    socket.on('stroke:batch', (p) => this.gated(socket, () => this.handleBatch(socket, p)));
+    socket.on('stroke:preview', (p) => this.gated(socket, () => this.handlePreview(socket, p)));
+    socket.on('stroke:delete', (id) => this.gated(socket, () => this.handleDelete(socket, id)));
+    socket.on('stroke:recolor', (p) => this.gated(socket, () => this.handleRecolor(socket, p)));
+  }
+
+  /** Runs `action` only once `authorizeWrite` clears the socket for a write. */
+  private gated(socket: CollabSocket, action: () => void | Promise<void>): void {
+    void (async () => {
+      if (!(await this.authorizeWrite(socket))) return;
+      await action();
+    })();
+  }
+
+  private handleBegin(socket: CollabSocket, p: StrokeBeginPayload): void {
+    log('net', 'IN stroke:begin', {
+      socketId: socket.id, userId: socket.data.userId,
+      tentativeId: p.tentativeId, color: p.color, size: p.size, camera: p.camera,
+    });
+    this.relay(socket, 'stroke:begin', { ...p, userId: socket.data.userId! });
+  }
+
+  private handlePoint(socket: CollabSocket, p: StrokePointPayload): void {
+    log('net', 'IN stroke:point', {
+      socketId: socket.id, tentativeId: p.tentativeId, point: p.point,
+    });
+    this.relay(socket, 'stroke:point', { ...p, userId: socket.data.userId! });
+  }
+
+  private handlePreview(socket: CollabSocket, p: StrokePreview): void {
+    log('net', 'IN stroke:preview', { socketId: socket.id, id: p.id, points: p.points.length });
+    this.relay(socket, 'stroke:preview', p);
   }
 
   private async handleCreate(
