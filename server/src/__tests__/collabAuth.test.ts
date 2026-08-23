@@ -184,14 +184,20 @@ describe('collab auth integration', () => {
   it('stroke:undoMine deletes only the caller-authored most recent stroke', async () => {
     const alice = await joinWith('p3_session=good');
     const bob = await joinWith('p3_session=good-bob');
+    // Discriminating order: bob's stroke is the room's most-recent overall, but it is
+    // NOT alice's most-recent. A regression that deletes "the last stroke in the room"
+    // regardless of author would wrongly pick b1 instead of a2.
     await commit(alice, 'a1');
-    await commit(bob, 'b1');
     await commit(alice, 'a2');
+    await commit(bob, 'b1');
     const deletedOnBob = nextEvent<string>(bob, 'stroke:deleted');
     const deletedOnAlice = nextEvent<string>(alice, 'stroke:deleted');
     alice.emit('stroke:undoMine');
     expect(await deletedOnBob).toBe('a2');
     expect(await deletedOnAlice).toBe('a2');
+    // b1 must survive: a second stroke:deleted would mean more than one stroke was removed.
+    const secondDelete = nextEvent<string>(bob, 'stroke:deleted', 500).catch(() => 'timeout');
+    expect(await secondDelete).toBe('timeout');
   });
 
   it('stroke:undoMine with nothing authored is a silent no-op', async () => {
