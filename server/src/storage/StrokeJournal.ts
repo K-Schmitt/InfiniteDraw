@@ -14,6 +14,8 @@ import { log } from '../debug/logger.js';
 
 const OP_ADD = 0;
 const OP_DELETE = 1;
+/** authorId-carrying add. Additive op: pre-auth readers skip unknown ops harmlessly. */
+const OP_ADD_AUTH = 2;
 
 export class StrokeJournal {
   private readonly strokes = new Map<string, BrushStroke>();
@@ -41,7 +43,11 @@ export class StrokeJournal {
 
   async appendStroke(stroke: BrushStroke): Promise<void> {
     this.strokes.set(stroke.id, stroke);
-    const record = frame(OP_ADD, encodeStroke(stroke));
+    const payload = stroke.authorId
+      ? Buffer.concat([writePascalString(stroke.authorId), encodeStroke(stroke)])
+      : encodeStroke(stroke);
+    const op = stroke.authorId ? OP_ADD_AUTH : OP_ADD;
+    const record = frame(op, payload);
     await appendFile(this.path, record);
     log('store', 'journal ADD', { id: stroke.id, bytes: record.length, live: this.strokes.size });
   }
@@ -61,6 +67,11 @@ export class StrokeJournal {
       const payload = buf.subarray(o, o + length);
       if (op === OP_ADD) {
         const { stroke } = decodeStroke(payload, 0);
+        this.strokes.set(stroke.id, stroke);
+      } else if (op === OP_ADD_AUTH) {
+        const author = readPascalString(payload, 0);
+        const { stroke } = decodeStroke(payload, author.next);
+        stroke.authorId = author.value;
         this.strokes.set(stroke.id, stroke);
       } else if (op === OP_DELETE) {
         this.strokes.delete(readPascalString(payload, 0).value);
