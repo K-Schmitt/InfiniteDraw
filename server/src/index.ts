@@ -4,8 +4,10 @@ import { resolve } from 'node:path';
 import { CollabServer } from './CollabServer.js';
 import { serveClient } from './staticSite.js';
 import { log, logFilePath, installProcessHooks } from './debug/logger.js';
+import { assertDevUserSafety } from './auth/devBypass.js';
 
 installProcessHooks();
+assertDevUserSafety(process.env);
 
 const app = express();
 const httpServer = createServer(app);
