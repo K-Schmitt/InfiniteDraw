@@ -10,6 +10,12 @@ interface ToolButton {
   title: string;
 }
 
+/** Callbacks the toolbar's action row fires — grouped to keep the constructor at 3 params. */
+export interface ToolbarActions {
+  onExportSvg: () => void;
+  onUndoMine: () => void;
+}
+
 const TOOL_BUTTONS: readonly ToolButton[] = [
   { id: 'brush', icon: '✏️', title: 'Brush (B)' },
   { id: 'line', icon: '／', title: 'Line (L)' },
@@ -35,11 +41,12 @@ export class Toolbar {
   private readonly secondarySwatch = document.createElement('button');
   private readonly primaryInput = document.createElement('input');
   private readonly secondaryInput = document.createElement('input');
+  private readonly undoMineBtn = document.createElement('button');
 
   constructor(
     private readonly settings: ToolSettings,
     private readonly manager: ToolManager,
-    private readonly onExportSvg: () => void,
+    private readonly actions: ToolbarActions,
   ) {
     this.root.id = 'toolbar';
     this.root.append(
@@ -59,6 +66,11 @@ export class Toolbar {
     this.manager.setActive(id);
     for (const [tid, btn] of this.toolButtons) btn.classList.toggle('active', tid === id);
     this.shapeRow.style.display = id === 'shape' ? 'flex' : 'none';
+  }
+
+  /** Show/hide the undo-mine button — only meaningful for an authenticated (non-spectator) user. */
+  setAuthed(isAuthed: boolean): void {
+    this.undoMineBtn.style.display = isAuthed ? '' : 'none';
   }
 
   swap(): void {
@@ -174,8 +186,13 @@ export class Toolbar {
   private buildActionRow(): HTMLElement {
     const group = makeGroup();
     const btn = makeIconButton('⤓', 'Export canvas as SVG');
-    btn.addEventListener('click', () => this.onExportSvg());
-    group.appendChild(btn);
+    btn.addEventListener('click', () => this.actions.onExportSvg());
+    this.undoMineBtn.className = 'icon-btn text';
+    this.undoMineBtn.textContent = '↩ Mon trait';
+    this.undoMineBtn.title = 'Annuler mon dernier trait';
+    this.undoMineBtn.style.display = 'none';
+    this.undoMineBtn.addEventListener('click', () => this.actions.onUndoMine());
+    group.append(btn, this.undoMineBtn);
     return group;
   }
 }

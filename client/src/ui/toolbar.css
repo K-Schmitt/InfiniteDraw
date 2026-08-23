@@ -53,6 +53,14 @@
   filter: saturate(1.1);
 }
 
+#toolbar .icon-btn.text {
+  width: auto;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 #toolbar .size-slider {
   width: 100%;
   accent-color: #2b7cff;

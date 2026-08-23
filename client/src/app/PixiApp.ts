@@ -8,6 +8,8 @@ import { CanvasState, type RendererInstruction } from '../state/CanvasState';
 import { ToolManager, type ToolId } from '../tools/ToolManager';
 import type { ToolSettings, ToolContext, CanvasApi } from '../tools/Tool';
 import { Toolbar } from '../ui/Toolbar';
+import { AuthBanner } from '../ui/AuthBanner';
+import { fetchSessionUser } from '../auth/session';
 import { ZenMode } from '../ui/ZenMode';
 import { ContextMenu, classifyPointerDown } from '../ui/ContextMenu';
 import { buildContextMenuItems } from '../ui/contextMenuItems';
@@ -66,7 +68,12 @@ export class PixiApp {
   private collabClient!: CollabClient;
   private remoteQueue!: RemoteStrokeQueue;
   private zoomHud!: HTMLElement;
+  private banner!: AuthBanner;
   private readonly settings = defaultSettings();
+
+  // UI-only gate — never authoritative. Starts true so a slow fetchSessionUser() can't leave a
+  // brief window where an unauthenticated visitor can draw before the check resolves.
+  private isSpectator = true;
 
   private isPanning = false;
   private lastPanX = 0;
@@ -111,10 +118,22 @@ export class PixiApp {
 
     this.tools = new ToolManager(this.settings, this.createCanvasApi(), (c) => this.applyPick(c));
     this.app.stage.addChild(this.tools.previewLayer);
-    this.toolbar = new Toolbar(this.settings, this.tools, () => this.exportSvg());
+    this.toolbar = new Toolbar(this.settings, this.tools, {
+      onExportSvg: () => this.exportSvg(),
+      onUndoMine: () => this.collabClient.undoMine(),
+    });
     document.body.appendChild(this.toolbar.root);
     this.zen = new ZenMode(document.body);
     this.contextMenu = new ContextMenu(buildContextMenuItems(this.toolbar, this.zen));
+    this.banner = new AuthBanner(document.body);
+    // UI-only session check — the server is the sole authority (it rejects writes from an
+    // unauthenticated socket regardless of this flag). Runs parallel to the socket connect below.
+    void fetchSessionUser().then((user) => {
+      this.isSpectator = user === null;
+      if (user) this.banner.showUser(user.name);
+      else this.banner.showSpectator();
+      this.toolbar.setAuthed(!this.isSpectator);
+    });
 
     const delegate: CollabDelegate = {
       loadSnapshot: (strokes) => {
@@ -136,6 +155,17 @@ export class PixiApp {
         for (const id of deletes) this.remoteQueue.enqueueDelete(id);
         for (const stroke of adds) this.remoteQueue.enqueueAdd(stroke);
       },
+      // Server-authoritative demotion: the socket's session lapsed, so drop to spectator UI even
+      // if this client's own state thought it was still authenticated.
+      authExpired: () => {
+        this.isSpectator = true;
+        this.banner.showSpectator();
+        this.banner.toast('Session expirée');
+        this.toolbar.setAuthed(false);
+      },
+      // A write was rejected server-side (client-state drift, e.g. a stale tab). Same toast as
+      // the local spectator guard — the user sees one consistent rejection message either way.
+      authDenied: () => this.banner.toast('Connecte-toi pour dessiner'),
     };
     this.remoteQueue = new RemoteStrokeQueue(this.remoteOpSink());
     // Same-origin, not a hardcoded host: in dev this is localhost:5173, and Vite's own
@@ -327,6 +357,13 @@ export class PixiApp {
   private handlePointerDown(e: PointerEvent, canvas: HTMLCanvasElement): void {
     if (e.button === 2) return this.handleRightClick(e, canvas);
     if (e.pointerType === 'touch' && this.trackTouchDown(e, canvas)) return;
+    // Single choke point for every draw-tool gesture (brush, line, shape, eraser, fill,
+    // eyedropper share this one entry) — right-click pan/menu and wheel zoom are handled by
+    // separate paths above/elsewhere and never reach here, so navigation stays unaffected.
+    if (this.isSpectator) {
+      this.banner.toast('Connecte-toi pour dessiner');
+      return;
+    }
     this.contextMenu.close();
     canvas.setPointerCapture(e.pointerId);
     const ctx = this.context(e, canvas.getBoundingClientRect());

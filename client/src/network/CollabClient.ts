@@ -27,6 +27,10 @@ export interface CollabDelegate {
   remoteStrokesRecolored(ids: readonly string[], color: Color): void;
   /** Remote user applied one atomic multi-stroke edit (eraser gesture). */
   remoteBatchApplied(deletes: readonly string[], adds: readonly BrushStroke[]): void;
+  /** The socket's session lapsed (TTL revalidation failed) — show spectator UI. */
+  authExpired(): void;
+  /** A write event was rejected because the socket has no authenticated session. */
+  authDenied(): void;
 }
 
 type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
@@ -126,6 +130,8 @@ export class CollabClient {
       this.removeGhost(userId);
     });
     this.socket.on('cursor:moved', (c) => this.moveGhost(c.userId, c.x, c.y, c.camera));
+    this.socket.on('auth:expired', () => { log('net', 'IN auth:expired'); this.delegate.authExpired(); });
+    this.socket.on('auth:denied', () => { log('net', 'IN auth:denied'); this.delegate.authDenied(); });
     this.socket.on('error', (msg) => log('error', 'server error', { message: msg }));
   }
 
@@ -181,6 +187,12 @@ export class CollabClient {
   sendStrokeRecolor(ids: readonly string[], color: Color): void {
     log('net', 'OUT stroke:recolor', { ids: ids.length, color, connected: this.socket.connected });
     this.socket.emit('stroke:recolor', { ids: [...ids], color });
+  }
+
+  /** Delete the caller's most recent authored stroke (mobile-friendly scoped undo). */
+  undoMine(): void {
+    log('net', 'OUT stroke:undoMine', { connected: this.socket.connected });
+    this.socket.emit('stroke:undoMine');
   }
 
   broadcastCursor(x: number, y: number, camera: SerializableCamera): void {
