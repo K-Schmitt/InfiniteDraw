@@ -75,4 +75,14 @@ describe('createWriterGate', () => {
     expect(validator).toHaveBeenCalledTimes(1);
     expect(s.emitted).toEqual(['auth:expired']);
   });
+
+  it('demotes (never rejects) when the validator throws during revalidation', async () => {
+    const validator = vi.fn(async () => { throw new Error('backend exploded'); });
+    const gate = createWriterGate({ validator, ttlMs: 10 });
+    const s = socketWith({ user: USER, cookieHeader: 'c', validatedAt: Date.now() - 50 });
+    await expect(gate(s)).resolves.toBeNull();
+    expect(s.data.auth.user).toBeNull();
+    expect(s.emitted).toEqual(['auth:expired']);
+    await expect(gate(s)).resolves.toBeNull(); // pending entry cleared, no stale promise
+  });
 });

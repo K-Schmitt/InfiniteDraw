@@ -43,4 +43,14 @@ describe('attachAuthMiddleware', () => {
     await new Promise<void>((resolve) => middleware(socket, () => resolve()));
     expect(socket.data.auth.user).toEqual(user);
   });
+
+  it('calls next() exactly once even when next() itself throws', async () => {
+    const ok: SessionValidator = async () => ({ id: 'u1', name: 'K' });
+    const middleware = captureMiddleware(ok);
+    const socket = fakeSocket('p3_session=x');
+    let calls = 0;
+    middleware(socket, () => { calls += 1; throw new Error('downstream blew up'); });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(calls).toBe(1);
+  });
 });

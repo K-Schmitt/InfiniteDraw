@@ -33,9 +33,11 @@ export function createWriterGate(config: WriterGateConfig): WriterGate {
     if (Date.now() - auth.validatedAt < config.ttlMs) return auth.user;
     const inFlight = pending.get(auth);
     if (inFlight) return inFlight;
-    const revalidation = revalidate(socket, auth, config.validator);
+    // `revalidate` never rejects, so the `.finally()`-derived promise cannot become an
+    // unhandled rejection — and it is the one we hand out, never a discarded chain.
+    const revalidation = revalidate(socket, auth, config.validator)
+      .finally(() => pending.delete(auth));
     pending.set(auth, revalidation);
-    void revalidation.finally(() => pending.delete(auth));
     return revalidation;
   };
 }
@@ -47,7 +49,11 @@ async function revalidate(
   validator: SessionValidator,
 ): Promise<AuthUser | null> {
   const priorUserId = auth.user?.id;
-  const revalidated = await validator(auth.cookieHeader);
+  // A throwing validator is treated like an invalid session: demote, never propagate.
+  const revalidated = await validator(auth.cookieHeader).catch((err: unknown) => {
+    log('error', 'revalidation threw, demoting', { message: (err as Error).message });
+    return null;
+  });
   auth.validatedAt = Date.now();
   if (revalidated) {
     auth.user = revalidated;
