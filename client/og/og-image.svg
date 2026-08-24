@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <pattern id="grid" width="50" height="50" patternUnits="userSpaceOnUse">
+      <path d="M50 0H0V50" fill="none" stroke="#a855f7" stroke-opacity="0.12" stroke-width="1"/>
+    </pattern>
+    <radialGradient id="halo" cx="0.5" cy="0" r="0.8">
+      <stop offset="0" stop-color="#a855f7" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#a855f7" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="#f5f0e8"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+  <rect width="1200" height="630" fill="url(#halo)"/>
+  <rect x="0" y="0" width="1200" height="6" fill="#a855f7"/>
+  <rect x="0" y="624" width="1200" height="6" fill="#a855f7"/>
+  <path d="M80 470 C 260 300, 420 560, 640 380 S 980 250, 1120 400" fill="none" stroke="#a855f7" stroke-width="10" stroke-linecap="round" stroke-opacity="0.9"/>
+  <path d="M120 520 C 300 480, 520 540, 760 470" fill="none" stroke="#a855f7" stroke-width="4" stroke-linecap="round" stroke-opacity="0.35"/>
+  <text x="80" y="150" font-family="JetBrains Mono, DejaVu Sans Mono, monospace" font-weight="700" font-size="30" fill="#8a8578">Kylian Schmitt</text>
+  <text x="80" y="245" font-family="JetBrains Mono, DejaVu Sans Mono, monospace" font-weight="700" font-size="88" fill="#2d2a24">InfinityBoard</text>
+  <text x="80" y="310" font-family="JetBrains Mono, DejaVu Sans Mono, monospace" font-size="34" fill="#6b6559">Canvas vectoriel infini · temps réel</text>
+</svg>
