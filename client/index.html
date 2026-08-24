@@ -53,6 +53,11 @@
         pointer-events: none;
         user-select: none;
       }
+      /* Keyboard shortcuts mean nothing on a touch device, and the block collides with the
+         toolbar on narrow screens. */
+      @media (pointer: coarse), (max-width: 640px) {
+        #help { display: none; }
+      }
     </style>
   </head>
   <body>

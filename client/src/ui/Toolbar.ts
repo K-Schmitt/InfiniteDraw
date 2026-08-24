@@ -187,9 +187,11 @@ export class Toolbar {
     const group = makeGroup();
     const btn = makeIconButton('⤓', 'Export canvas as SVG');
     btn.addEventListener('click', () => this.actions.onExportSvg());
-    this.undoMineBtn.className = 'icon-btn text';
-    this.undoMineBtn.textContent = '↩ Mon trait';
+    // Icon-only: the 76px toolbar has no room for a label, and `text` buttons overflow it.
+    this.undoMineBtn.className = 'icon-btn';
+    this.undoMineBtn.textContent = '↩';
     this.undoMineBtn.title = 'Annuler mon dernier trait';
+    this.undoMineBtn.setAttribute('aria-label', 'Annuler mon dernier trait');
     this.undoMineBtn.style.display = 'none';
     this.undoMineBtn.addEventListener('click', () => this.actions.onUndoMine());
     group.append(btn, this.undoMineBtn);
