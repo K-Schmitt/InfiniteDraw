@@ -59,12 +59,14 @@ export function resolveFill(request: ResolveFillRequest): ResolvedFill | null {
   if (!traced) return null;
   const exact = tryExact(request, wallIndices, traced);
   // The budget is a wire-size guarantee, so it has to bind on the path that normally wins too —
-  // an exact face inherits every perfect-freehand vertex of its bounding strokes. Tolerance here
-  // is in frame units, not pixels: TRACE_TOLERANCE_PX / frameScale.
+  // an exact face inherits every perfect-freehand vertex of its bounding strokes. Under budget
+  // the face is kept verbatim (tolerance 0): a 1px first pass replaced curved edges with chords
+  // inside the region, a sliver between outline and fill that zoom-in magnified. Only an
+  // over-budget face is simplified, starting at TRACE_TOLERANCE_PX in frame units.
   if (exact) {
     const fitted = fitVertexBudget(
       { outer: exact[0]!, holes: exact.slice(1) },
-      TRACE_TOLERANCE_PX / request.frameScale,
+      { tolerance: 0, seed: TRACE_TOLERANCE_PX / request.frameScale },
     );
     return { rings: [fitted.outer, ...fitted.holes], exact: true, wallIndices };
   }
@@ -84,7 +86,7 @@ function frameRegion(
   // and ranking by `outer.length` would rank by vertex count, not area, if there ever were.
   const largest = groupRings(traceMask(mask))[0];
   if (!largest) return null;
-  const fitted = fitVertexBudget(largest, TRACE_TOLERANCE_PX);
+  const fitted = fitVertexBudget(largest, { tolerance: TRACE_TOLERANCE_PX });
   return {
     outer: maskPxToFrame(fitted.outer, frameScale, originPx),
     holes: fitted.holes.map((h) => maskPxToFrame(h, frameScale, originPx)),

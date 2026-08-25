@@ -37,14 +37,25 @@ describe('simplifyRing', () => {
 describe('fitVertexBudget', () => {
   it('leaves a small region untouched', () => {
     const region = { outer: [0, 0, 10, 0, 10, 10, 0, 10], holes: [] };
-    expect(fitVertexBudget(region, 1).outer).toHaveLength(8);
+    expect(fitVertexBudget(region, { tolerance: 1 }).outer).toHaveLength(8);
   });
 
   it('forces a huge region under the budget', () => {
     const region = { outer: staircase(4000), holes: [] };
-    const fitted = fitVertexBudget(region, 1);
+    const fitted = fitVertexBudget(region, { tolerance: 1 });
     const total = fitted.outer.length / 2 + fitted.holes.reduce((n, h) => n + h.length / 2, 0);
     expect(total).toBeLessThanOrEqual(MAX_FILL_VERTICES);
+  });
+
+  it('keeps an under-budget region verbatim at tolerance 0', () => {
+    const region = { outer: staircase(200), holes: [] };
+    expect(fitVertexBudget(region, { tolerance: 0, seed: 1 }).outer).toEqual(region.outer);
+  });
+
+  it('grows from the seed when tolerance 0 is over budget', () => {
+    const region = { outer: staircase(4000), holes: [] };
+    const fitted = fitVertexBudget(region, { tolerance: 0, seed: 1 });
+    expect(fitted.outer.length / 2).toBeLessThanOrEqual(MAX_FILL_VERTICES);
   });
 
   it('simplifies holes along with the outer ring', () => {

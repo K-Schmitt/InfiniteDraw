@@ -246,3 +246,59 @@ describe('resolveFill with a padded mask (originPx)', () => {
     expect(Math.max(...xs)).toBeLessThanOrEqual(12 + 0.1);
   });
 });
+
+/**
+ * Regression: the exact face used to go through Douglas-Peucker at TRACE_TOLERANCE_PX even when
+ * it was already under the vertex budget. On a curved freehand outline that replaces arcs with
+ * chords that sit strictly INSIDE the region — a ~1px sliver between the outline and the fill
+ * that scales up with every zoom-in. An exact face under budget must be returned verbatim.
+ */
+describe('resolveFill keeps an under-budget exact face verbatim', () => {
+  const SIZE = 40;
+  const SIDES = 64;
+
+  function circle(radius: number): number[] {
+    const ring: number[] = [];
+    for (let i = 0; i < SIDES; i++) {
+      const a = (i / SIDES) * Math.PI * 2;
+      ring.push(20 + radius * Math.cos(a), 20 + radius * Math.sin(a));
+    }
+    return ring;
+  }
+
+  function insideRing(px: number, py: number, ring: readonly number[]): boolean {
+    let hit = false;
+    for (let i = 0, j = ring.length - 2; i < ring.length; j = i, i += 2) {
+      const xi = ring[i]!; const yi = ring[i + 1]!;
+      const xj = ring[j]!; const yj = ring[j + 1]!;
+      if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) hit = !hit;
+    }
+    return hit;
+  }
+
+  /** Wall = everything outside the inner circle (a solid disc-shaped enclosure). */
+  function discMask(inner: readonly number[]): PixelBuffer {
+    const data = new Uint8ClampedArray(SIZE * SIZE * 4);
+    for (let y = 0; y < SIZE; y++) {
+      for (let x = 0; x < SIZE; x++) {
+        if (insideRing(x + 0.5, y + 0.5, inner)) continue;
+        const i = (y * SIZE + x) * 4;
+        data[i] = 1;
+        data[i + 3] = 255;
+      }
+    }
+    return { data, width: SIZE, height: SIZE };
+  }
+
+  it('does not simplify a 64-gon face that is far under MAX_FILL_VERTICES', () => {
+    const inner = circle(15);
+    const outer = [0, 0, SIZE, 0, SIZE, SIZE, 0, SIZE];
+    const result = resolveFill({
+      source: { buffer: discMask(inner), wallRings: [[outer, inner]] },
+      seedPx: { x: 20, y: 20 },
+      frameScale: 1,
+    })!;
+    expect(result.exact).toBe(true);
+    expect(result.rings[0]!.length / 2).toBe(SIDES);
+  });
+});

@@ -25,7 +25,11 @@ const MIN_RING_POINTS = 3;
 export function simplifyRing(ring: readonly number[], tolerance: number): number[] {
   const points = toPoints(ring);
   if (points.length <= MIN_RING_POINTS) return [...ring];
-  const kept = douglasPeucker(collinearRuns(points), tolerance * tolerance);
+  const runs = collinearRuns(points);
+  // Tolerance 0 keeps every non-collinear vertex by definition — DP would only recurse once per
+  // vertex (O(n) deep, a stack overflow on a long freehand face) to return the same ring.
+  if (tolerance <= 0) return flatten(runs);
+  const kept = douglasPeucker(runs, tolerance * tolerance);
   return kept.length >= MIN_RING_POINTS ? flatten(kept) : decimate(points);
 }
 
@@ -63,12 +67,26 @@ export function simplifyRegion(region: TracedRegion, tolerance: number): TracedR
   };
 }
 
-/** Simplifies with a growing tolerance until the region fits `MAX_FILL_VERTICES`. */
-export function fitVertexBudget(region: TracedRegion, tolerance: number): TracedRegion {
-  let current = simplifyRegion(region, tolerance);
-  let step = tolerance;
+export interface VertexBudgetOptions {
+  /** Tolerance of the first pass; 0 keeps every non-collinear vertex. */
+  readonly tolerance: number;
+  /** First tolerance tried when the region is over budget; defaults to `tolerance`. */
+  readonly seed?: number;
+}
+
+/**
+ * Simplifies with a growing tolerance until the region fits `MAX_FILL_VERTICES`.
+ *
+ * An exact face passes `tolerance: 0` with a pixel-sized `seed`: Douglas-Peucker replaces
+ * every arc of a curved outline with a chord that lies strictly INSIDE the region, so any
+ * non-zero first-pass tolerance opens a sliver between the outline and the fill that grows
+ * with every zoom-in. Under budget the face must be committed verbatim.
+ */
+export function fitVertexBudget(region: TracedRegion, opts: VertexBudgetOptions): TracedRegion {
+  let current = simplifyRegion(region, opts.tolerance);
+  let step = opts.tolerance;
   for (let i = 0; i < MAX_DOUBLINGS && vertexCount(current) > MAX_FILL_VERTICES; i++) {
-    step *= 2;
+    step = step > 0 ? step * 2 : (opts.seed ?? opts.tolerance);
     current = simplifyRegion(region, step);
   }
   return current;
